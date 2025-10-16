@@ -3,23 +3,33 @@ const {
   createOrder,
   getMyOrders,
   getOrder,
-  updateOrderStatus,
-  getOrders
+  getPendingOrders,
+  acceptDelivery,
+  rejectDelivery,
+  getMyActiveDeliveries,
+  updateOrderStatus
 } = require('../controllers/orderController');
+const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-router.route('/')
-  .post(createOrder)
-  .get(getOrders);
+// All routes require authentication
+router.use(protect);
 
-router.route('/my-orders')
-  .get(getMyOrders);
+// ====================
+// CUSTOMER ROUTES
+// ====================
+router.post('/', createOrder); // Customers create orders
+router.get('/my-orders', getMyOrders); // Customers view their orders
+router.get('/:id', getOrder); // Customers view specific order
 
-router.route('/:id')
-  .get(getOrder);
-
-router.route('/:id/status')
-  .put(updateOrderStatus);
+// ====================
+// RIDER/ADMIN ROUTES
+// ====================
+router.get('/status/pending', authorize('rider', 'admin'), getPendingOrders);
+router.get('/my-deliveries/active', authorize('rider', 'admin'), getMyActiveDeliveries);
+router.patch('/:orderId/accept', authorize('rider', 'admin'), acceptDelivery);
+router.patch('/:orderId/reject', authorize('rider', 'admin'), rejectDelivery);
+router.patch('/:orderId/status', authorize('rider', 'admin'), updateOrderStatus);
 
 module.exports = router;
