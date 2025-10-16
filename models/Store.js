@@ -3,73 +3,40 @@ const mongoose = require('mongoose');
 const storeSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: [true, 'Please add a store name'],
+    required: true,
     trim: true
   },
   description: {
     type: String,
-    required: [true, 'Please add a description']
+    required: true
   },
   image: {
     type: String,
-    required: [true, 'Please add an image']
+    required: true
   },
   category: {
     type: String,
-    required: [true, 'Please add a category'],
-    enum: ['Restaurants', 'Groceries', 'Electronics', 'Fashion', 'Pharmacy', 'Bakery', 'Flowers', 'Pets']
-  },
-  rating: {
-    type: Number,
-    default: 0,
-    min: 0,
-    max: 5
-  },
-  reviewCount: {
-    type: Number,
-    default: 0
+    required: true
   },
   deliveryTime: {
     type: String,
-    required: [true, 'Please add delivery time']
+    required: true
   },
   deliveryFee: {
     type: Number,
-    required: [true, 'Please add delivery fee'],
+    required: true,
     min: 0
-  },
-  minOrder: {
-    type: Number,
-    required: [true, 'Please add minimum order amount'],
-    min: 0
-  },
-  isOpen: {
-    type: Boolean,
-    default: true
   },
   phone: {
     type: String,
-    required: [true, 'Please add a phone number']
+    required: true
   },
   address: {
     type: String,
-    required: [true, 'Please add an address']
-  },
-  location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point'
-    },
-    coordinates: {
-      type: [Number],
-      default: [0, 0]
-    }
+    required: true
   }
 }, {
   timestamps: true
 });
-
-storeSchema.index({ location: '2dsphere' });
 
 module.exports = mongoose.model('Store', storeSchema);

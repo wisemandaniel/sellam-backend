@@ -6,6 +6,11 @@ const orderItemSchema = new mongoose.Schema({
     ref: 'Product',
     required: true
   },
+  store: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Store',
+    required: true
+  },
   quantity: {
     type: Number,
     required: true,
@@ -29,10 +34,9 @@ const orderSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  store: {
+  rider: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Store',
-    required: true
+    ref: 'User'
   },
   items: [orderItemSchema],
   subtotal: {
@@ -52,7 +56,7 @@ const orderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'preparing', 'delivering', 'delivered', 'cancelled'],
+    enum: ['pending', 'accepted', 'picked_up', 'delivered', 'cancelled', 'rejected'],
     default: 'pending'
   },
   deliveryAddress: {
@@ -67,21 +71,34 @@ const orderSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  whatsappMessageId: {
-    type: String,
-    default: ''
+  // Timestamps for order lifecycle
+  acceptedAt: {
+    type: Date
+  },
+  rejectedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  rejectedAt: {
+    type: Date
+  },
+  pickedUpAt: {
+    type: Date
+  },
+  deliveredAt: {
+    type: Date
+  },
+  cancelledAt: {
+    type: Date
   }
 }, {
   timestamps: true
 });
 
-// Generate order number before saving
-orderSchema.pre('save', async function(next) {
-  if (!this.orderNumber) {
-    const count = await mongoose.model('Order').countDocuments();
-    this.orderNumber = `ORD${Date.now()}${count + 1}`;
-  }
-  next();
-});
+// Indexes for performance
+orderSchema.index({ status: 1, createdAt: -1 });
+orderSchema.index({ rider: 1, status: 1 });
+orderSchema.index({ user: 1, createdAt: -1 });
+orderSchema.index({ orderNumber: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);
