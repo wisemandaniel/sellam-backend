@@ -185,7 +185,6 @@
  * models/User.js
  * Complete updated file with requested schema and helpers.
  */
-
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 
@@ -226,26 +225,20 @@ const userSchema = new mongoose.Schema(
     licensePlate: { type: String, default: "" },
     rating: { type: Number, default: 4.5, min: 0, max: 5 },
 
-    // --- UPDATED: totalDeliveries is now an object (JSON) with count + delivery data
     totalDeliveries: {
       type: {
         count: { type: Number, default: 0 },
-        deliveries: { type: [Object], default: [] }, // array of delivery metadata objects
+        deliveries: { type: [Object], default: [] },
       },
       default: { count: 0, deliveries: [] },
     },
 
     isProfileComplete: { type: Boolean, default: false },
-
-    // --- UPDATED: phoneVerified tracks if the user's phone has been verified (via OTP)
     phoneVerified: { type: Boolean, default: false },
-
-    // --- UPDATED: isActive is derived from isProfileComplete && phoneVerified (computed before save)
     isActive: { type: Boolean, default: false },
 
     lastLogin: { type: Date, default: Date.now },
 
-    // Device management
     verifiedDevices: [deviceSchema],
     pendingDeviceVerification: {
       deviceId: String,
@@ -254,9 +247,7 @@ const userSchema = new mongoose.Schema(
       requestedAt: Date,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 // Generate JWT token
@@ -275,7 +266,7 @@ userSchema.methods.checkProfileComplete = function () {
   return this.isProfileComplete;
 };
 
-// Compute isActive (updated logic) -- helper used in pre-save
+// Compute isActive (active only when profile complete + phone verified)
 userSchema.methods.computeIsActive = function () {
   this.isActive = !!(this.isProfileComplete && this.phoneVerified);
   return this.isActive;
@@ -325,26 +316,14 @@ userSchema.methods.addVerifiedDevice = function (deviceId, deviceInfo = {}) {
   }
 };
 
-// --- UPDATED: pushDeliveryMeta - store a delivery record inside user.totalDeliveries
-/**
- * deliveryMeta example:
- * {
- *   orderId: ...,
- *   orderNumber: ...,
- *   deliveredAt: Date,
- *   deliveryFee: Number,
- *   distance: Number,
- *   earnings: Number
- * }
- */
+// Push delivery metadata
 userSchema.methods.pushDeliveryMeta = function (deliveryMeta) {
   if (!this.totalDeliveries) {
     this.totalDeliveries = { count: 0, deliveries: [] };
   }
-  this.totalDeliveries.deliveries.unshift(deliveryMeta); // newest first
+  this.totalDeliveries.deliveries.unshift(deliveryMeta);
   this.totalDeliveries.count = (this.totalDeliveries.count || 0) + 1;
 
-  // Optionally trim deliveries storage to a reasonable size (e.g., last 1000) to prevent unbounded growth
   const MAX_DELIVERIES_STORED =
     Number(process.env.MAX_DELIVERIES_STORED) || 1000;
   if (this.totalDeliveries.deliveries.length > MAX_DELIVERIES_STORED) {
@@ -355,11 +334,37 @@ userSchema.methods.pushDeliveryMeta = function (deliveryMeta) {
   }
 };
 
-// Update profile complete and isActive before saving
+// Pre-save hook: recompute profile completeness and activity
 userSchema.pre("save", function (next) {
   this.checkProfileComplete();
   this.computeIsActive();
   next();
+});
+
+// Post-save hook: sync Account model automatically
+userSchema.post("save", async function (doc) {
+  try {
+    const Account = require("./Account");
+    const account = await Account.findOne({ user: doc._id });
+
+    if (account) {
+      // Keep account status aligned with user activity
+      const desiredStatus = doc.isActive ? "active" : "inactive";
+      if (account.status !== desiredStatus) {
+        account.status = desiredStatus;
+        await account.save();
+      }
+    } else if (doc.role === "rider") {
+      // Create a new inactive account by default
+      await Account.create({
+        user: doc._id,
+        vehicleType: doc.vehicleType,
+        status: doc.isActive ? "active" : "inactive",
+      });
+    }
+  } catch (err) {
+    console.error("Error syncing account after user save:", err.message);
+  }
 });
 
 module.exports = mongoose.model("User", userSchema);

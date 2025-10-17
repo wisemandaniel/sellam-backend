@@ -964,7 +964,7 @@ const formatPrice = (price) => {
 // WHATSAPP TEMPLATE FUNCTIONALITY
 // ================================
 
-// Template 1: Order Notification (5 variables - PRIVACY COMPLIANT)
+//Template 1: Order Notification (5 variables - PRIVACY COMPLIANT)
 const sendWhatsAppTemplate = async (order, storeIds) => {
   if (!twilioClient || !process.env.WHATSAPP_TEMPLATE_SID) {
     console.log("⚠️ WhatsApp templates not configured");

@@ -1067,54 +1067,89 @@ const sendOTPInternal = async (phoneNumber) => {
     .verifications.create({ to: phoneNumber, channel: "sms" });
 };
 
-// [PRESERVED ORIGINAL + UPDATED LOGIC]
+//[UPDATED LOGIC] Handles both new user creation and returning existing users
 const createOrUpdateUser = async (req, res) => {
   try {
-    const { name, phone, address, role = "client" } = req.body;
-    if (!phone || !name || !address)
+    const {
+      name,
+      phone,
+      address,
+      role = "client",
+      deviceId,
+      deviceInfo,
+    } = req.body;
+
+    if (!phone)
       return res
         .status(400)
-        .json({ success: false, message: "Name, phone and address required" });
+        .json({ success: false, message: "Phone required" });
 
     const formattedPhone = formatPhoneNumber(phone);
     let user = await User.findOne({ phone: formattedPhone });
     let isNew = false;
 
+    // --- CREATE OR UPDATE USER ---
     if (user) {
-      user.name = name;
-      user.address = address;
-      user.role = role;
-      await user.save();
+      // Update only the provided fields
+      const updateData = {};
+      if (name) updateData.name = name;
+      if (address) updateData.address = address;
+      if (role) updateData.role = role;
+
+      user = await User.findOneAndUpdate(
+        { phone: formattedPhone },
+        updateData,
+        { new: true, runValidators: true }
+      );
     } else {
-      user = await User.create({ name, phone: formattedPhone, address, role });
+      // Create minimal user with phone; others can be added later
+      user = await User.create({
+        name: name || "",
+        phone: formattedPhone,
+        address: address || "",
+        role,
+      });
       isNew = true;
     }
 
+    // --- SAFELY HANDLE ACCOUNT CREATION ---
     if (user.role === "rider") {
-      await Account.findOneAndUpdate(
-        { user: user._id },
-        {
-          $setOnInsert: {
-            user: user._id,
-            status: "active",
-            vehicleType: user.vehicleType || "motorcycle",
-          },
-        },
-        { upsert: true, new: true }
-      );
+      let account = await Account.findOne({ user: user._id });
+      if (!account) {
+        account = await Account.create({
+          user: user._id,
+          status: user.isActive ? "active" : "inactive", // only active if user isActive
+          vehicleType: user.vehicleType || "motorcycle",
+        });
+      }
+    }
+
+    // --- ADD DEVICE (if present) ---
+    if (deviceId) {
+      user.addVerifiedDevice(deviceId, deviceInfo || {});
+      await user.save();
     }
 
     const token = user.generateAuthToken();
     const account = await Account.findOne({ user: user._id });
-    res.json({
+
+    return res.status(200).json({
       success: true,
       data: user,
       account: account || null,
       token,
-      message: isNew ? "Profile created" : "Profile updated",
+      message: isNew
+        ? "Profile created successfully"
+        : "Profile updated successfully",
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("createOrUpdateUser error:", err);
+    if (err.code === 11000 && err.keyPattern && err.keyPattern.phone) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Phone already exists" });
+    }
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -1129,16 +1164,25 @@ const loginUser = async (req, res) => {
 
     const formattedPhone = formatPhoneNumber(phone);
     let user = await User.findOne({ phone: formattedPhone });
+
+    // Ensure user exists
     if (!user) {
       user = await User.create({ phone: formattedPhone, role });
-      if (role === "rider")
-        await Account.create({
-          user: user._id,
-          status: "active",
-          vehicleType: user.vehicleType || "motorcycle",
-        });
     }
 
+    // Ensure rider account exists (safe version)
+    if (role === "rider") {
+      let account = await Account.findOne({ user: user._id });
+      if (!account) {
+        account = await Account.create({
+          user: user._id,
+          status: user.isActive ? "active" : "inactive",
+          vehicleType: user.vehicleType || "motorcycle",
+        });
+      }
+    }
+
+    // OTP handling
     if (DISABLE_OTP_VERIFICATION) {
       user.addVerifiedDevice(deviceId, deviceInfo);
       user.phoneVerified = true;
@@ -1146,6 +1190,7 @@ const loginUser = async (req, res) => {
 
       const token = user.generateAuthToken();
       const account = await Account.findOne({ user: user._id });
+
       return res.json({
         success: true,
         requiresOtp: false,
@@ -1186,7 +1231,9 @@ const loginUser = async (req, res) => {
       });
     }
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    return res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -1206,32 +1253,62 @@ const verifyOTP = async (req, res) => {
         .status(404)
         .json({ success: false, message: "User not found" });
 
+    // ======== DEV MODE (OTP DISABLED) ========
     if (DISABLE_OTP_VERIFICATION) {
       user.addVerifiedDevice(deviceId, deviceInfo);
       user.phoneVerified = true;
       await user.save();
-    } else {
+    }
+    // ======== PRODUCTION MODE (OTP ENABLED) ========
+    else {
+      if (!twilioClient)
+        return res
+          .status(500)
+          .json({ success: false, message: "Twilio not configured" });
+
       const check = await twilioClient.verify.v2
         .services(process.env.TWILIO_VERIFY_SERVICE_SID)
         .verificationChecks.create({ to: formattedPhone, code: otp });
+
       if (check.status !== "approved")
-        return res.status(400).json({ success: false, message: "Invalid OTP" });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+          status: check.status,
+        });
 
       user.addVerifiedDevice(deviceId, deviceInfo);
       user.phoneVerified = true;
       await user.save();
     }
 
+    // ======== ACCOUNT CREATION SAFEGUARD ========
+    // Ensures a rider always has one account, never duplicates
+    if (user.role === "rider") {
+      let account = await Account.findOne({ user: user._id });
+      if (!account) {
+        account = await Account.create({
+          user: user._id,
+          status: user.isActive ? "active" : "inactive",
+          vehicleType: user.vehicleType || "motorcycle",
+        });
+      }
+    }
+
     const token = user.generateAuthToken();
     const account = await Account.findOne({ user: user._id });
+
     return res.json({
       success: true,
       data: user,
       account,
       token,
-      message: "OTP verified successfully",
+      message: DISABLE_OTP_VERIFICATION
+        ? "OTP verified (dev mode)"
+        : "OTP verified successfully",
     });
   } catch (err) {
+    console.error("OTP verification error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -1269,43 +1346,84 @@ const getProfile = async (req, res) => {
   }
 };
 
-// [PRESERVED ORIGINAL]
+// [UPDATED LOGIC] Ensure profile completeness and Keeps user <-> account state fully consistent
 const updateProfile = async (req, res) => {
   try {
     const { name, phone, address, vehicleType, licensePlate } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone is required",
+      });
+    }
+
     const formattedPhone = formatPhoneNumber(phone);
 
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { name, phone: formattedPhone, address, vehicleType, licensePlate },
-      { new: true, runValidators: true }
-    );
+    // Prevent duplicate phone numbers
+    const existingUser = await User.findOne({
+      phone: formattedPhone,
+      _id: { $ne: req.user.id },
+    });
+    if (existingUser)
+      return res
+        .status(400)
+        .json({ success: false, message: "Phone number already exists" });
+
+    const updateData = {
+      name: name?.trim() || "",
+      phone: formattedPhone,
+      address: address?.trim() || "",
+      vehicleType: vehicleType || "motorcycle",
+      licensePlate: vehicleType === "car" ? licensePlate || "" : "",
+    };
+
+    let user = await User.findByIdAndUpdate(req.user.id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
     if (!user)
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
 
-    if (user.role === "rider")
-      await Account.findOneAndUpdate(
-        { user: user._id },
-        {
-          $setOnInsert: {
-            status: "active",
-            vehicleType: user.vehicleType,
-          },
-        },
-        { upsert: true }
-      );
+    // Recompute completeness and active status
+    user.checkProfileComplete();
+    user.computeIsActive();
+    await user.save(); // triggers post-save hook to sync account
 
-    const account = await Account.findOne({ user: user._id });
-    res.json({
+    // Manually ensure account sync (safety double-check)
+    let account = await Account.findOne({ user: user._id });
+
+    if (account) {
+      account.status = user.isActive ? "active" : "inactive";
+      await account.save();
+    } else if (user.role === "rider") {
+      account = await Account.create({
+        user: user._id,
+        vehicleType: user.vehicleType,
+        status: user.isActive ? "active" : "inactive",
+      });
+    }
+
+    return res.json({
       success: true,
       data: user,
-      account,
-      message: "Profile updated",
+      account: account || null,
+      message: "Profile updated successfully",
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    if (err.code === 11000 && err.keyPattern && err.keyPattern.phone) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Phone number already exists" });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
   }
 };
 
