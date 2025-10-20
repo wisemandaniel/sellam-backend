@@ -3,73 +3,68 @@ const mongoose = require('mongoose');
 const storeSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: [true, 'Please add a store name'],
+    required: true,
     trim: true
   },
   description: {
     type: String,
-    required: [true, 'Please add a description']
+    required: true
   },
   image: {
     type: String,
-    required: [true, 'Please add an image']
+    required: true
   },
   category: {
     type: String,
-    required: [true, 'Please add a category'],
-    enum: ['Restaurants', 'Groceries', 'Electronics', 'Fashion', 'Pharmacy', 'Bakery', 'Flowers', 'Pets']
+    required: true
   },
   rating: {
     type: Number,
-    default: 0,
+    required: true,
     min: 0,
-    max: 5
+    max: 5,
+    default: 0
   },
   reviewCount: {
     type: Number,
+    required: true,
+    min: 0,
     default: 0
   },
   deliveryTime: {
     type: String,
-    required: [true, 'Please add delivery time']
+    required: true
   },
   deliveryFee: {
     type: Number,
-    required: [true, 'Please add delivery fee'],
+    required: true,
     min: 0
   },
   minOrder: {
     type: Number,
-    required: [true, 'Please add minimum order amount'],
+    required: true,
     min: 0
   },
   isOpen: {
     type: Boolean,
+    required: true,
     default: true
   },
   phone: {
     type: String,
-    required: [true, 'Please add a phone number']
+    required: true
   },
   address: {
     type: String,
-    required: [true, 'Please add an address']
-  },
-  location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point'
-    },
-    coordinates: {
-      type: [Number],
-      default: [0, 0]
-    }
+    required: true
   }
 }, {
   timestamps: true
 });
 
-storeSchema.index({ location: '2dsphere' });
+// Index for better query performance
+storeSchema.index({ category: 1, isOpen: 1 });
+storeSchema.index({ rating: -1 });
+storeSchema.index({ name: 'text', description: 'text' });
 
 module.exports = mongoose.model('Store', storeSchema);

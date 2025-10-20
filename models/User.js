@@ -1,33 +1,329 @@
-const mongoose = require('mongoose');
+/**
+ * models/User.js
+ * FINAL FIXED VERSION - Consistent ranking across all riders
+ */
+const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
+require('dotenv').config();
 
-const userSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Please add a name'],
-    trim: true
+const deviceSchema = new mongoose.Schema(
+  {
+    deviceId: { type: String, required: true },
+    deviceType: { type: String, default: "mobile" },
+    os: { type: String, default: "unknown" },
+    isVerified: { type: Boolean, default: true },
+    verifiedAt: { type: Date, default: Date.now },
+    lastLogin: { type: Date, default: Date.now },
   },
-  email: {
-    type: String,
-    required: [true, 'Please add an email'],
-    unique: true,
-    lowercase: true,
-    trim: true
+  { _id: false }
+);
+
+const userSchema = new mongoose.Schema(
+  {
+    name: { type: String, trim: true, default: "" },
+    phone: {
+      type: String,
+      required: [true, "Please add a phone number"],
+      unique: true,
+      trim: true,
+    },
+    email: { type: String, trim: true, default: "", lowercase: true },
+    address: { type: String, default: "" },
+    profileImage: { type: String, default: "" },
+    role: {
+      type: String,
+      enum: ["client", "rider", "vendor"],
+      required: true
+    },
+    vehicleType: {
+      type: String,
+      enum: ["bike", "car", "bicycle", "on_foot"],
+      default: "bike",
+    },
+    licensePlate: { type: String, default: "" },
+    
+    // Rating and ranking system
+    rating: { type: Number, default: 4.5, min: 0, max: 5 },
+    ratingCount: { type: Number, default: 0 },
+    
+    // Ranking information (computed)
+    ranking: {
+      rank: { type: Number, default: 0 },
+      totalAgents: { type: Number, default: 0 },
+      lastUpdated: { type: Date, default: Date.now }
+    },
+
+    totalDeliveries: {
+      type: {
+        count: { type: Number, default: 0 },
+        deliveries: { type: [Object], default: [] },
+      },
+      default: { count: 0, deliveries: [] },
+    },
+
+    isProfileComplete: { type: Boolean, default: false },
+    phoneVerified: { type: Boolean, default: false },
+    isActive: { type: Boolean, default: false },
+    lastLogin: { type: Date, default: Date.now },
+    verifiedDevices: [deviceSchema],
+    pendingDeviceVerification: {
+      deviceId: String,
+      deviceInfo: Object,
+      phone: String,
+      requestedAt: Date,
+    },
   },
-  phone: {
-    type: String,
-    required: [true, 'Please add a phone number'],
-    trim: true
-  },
-  address: {
-    type: String,
-    required: [true, 'Please add an address']
-  },
-  profileImage: {
-    type: String,
-    default: ''
+  { timestamps: true }
+);
+
+// Generate JWT token
+userSchema.methods.generateAuthToken = function () {
+  const token = jwt.sign(
+    { id: this._id, role: this.role },
+    process.env.JWT_SECRET || "fallback-secret-key-for-development",
+    { expiresIn: "36500d" }
+  );
+  return token;
+};
+
+// Check if profile is complete
+userSchema.methods.checkProfileComplete = function () {
+  this.isProfileComplete = !!(this.name && this.address && this.phone);
+  return this.isProfileComplete;
+};
+
+// Compute isActive
+userSchema.methods.computeIsActive = function () {
+  this.isActive = !!(this.isProfileComplete && this.phoneVerified);
+  return this.isActive;
+};
+
+// Check if device is verified
+userSchema.methods.isDeviceVerified = function (deviceId) {
+  if (!this.verifiedDevices || this.verifiedDevices.length === 0) return false;
+  return this.verifiedDevices.some(
+    (device) => device.deviceId === deviceId && device.isVerified
+  );
+};
+
+// Add or update verified device
+userSchema.methods.addVerifiedDevice = function (deviceId, deviceInfo = {}) {
+  if (!this.verifiedDevices) this.verifiedDevices = [];
+
+  const existingDeviceIndex = this.verifiedDevices.findIndex(
+    (device) => device.deviceId === deviceId
+  );
+
+  const deviceData = {
+    deviceId,
+    deviceType: deviceInfo.deviceType || "mobile",
+    os: deviceInfo.os || "unknown",
+    isVerified: true,
+    verifiedAt: new Date(),
+    lastLogin: new Date(),
+    ...deviceInfo,
+  };
+
+  if (existingDeviceIndex !== -1) {
+    this.verifiedDevices[existingDeviceIndex] = {
+      ...this.verifiedDevices[existingDeviceIndex],
+      ...deviceData,
+    };
+  } else {
+    this.verifiedDevices.push(deviceData);
   }
-}, {
-  timestamps: true
+
+  if (this.verifiedDevices.length > 5) {
+    this.verifiedDevices.sort(
+      (a, b) => new Date(b.lastLogin) - new Date(a.lastLogin)
+    );
+    this.verifiedDevices = this.verifiedDevices.slice(0, 5);
+  }
+};
+
+// FIXED: Update ranking using STATIC method for consistency
+userSchema.methods.updateRanking = async function () {
+  if (this.role !== 'rider') return null;
+
+  try {
+    console.log(`🔄 Updating ranking for ${this.name || this.phone}`);
+    
+    // Use the static method to ensure consistency
+    const result = await mongoose.model('User').updateAllRankings();
+    
+    if (result) {
+      // Reload the user to get updated ranking
+      const updatedUser = await mongoose.model('User').findById(this._id);
+      console.log(`✅ Ranking updated: ${updatedUser.ranking.rank}/${updatedUser.ranking.totalAgents}`);
+      return updatedUser.ranking;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ Error updating ranking:', error);
+    return null;
+  }
+};
+
+// STATIC METHOD: Update ALL rankings at once for consistency
+userSchema.statics.updateAllRankings = async function () {
+  try {
+    console.log('🔄 UPDATING ALL RANKINGS CONSISTENTLY...');
+    
+    // Get ALL riders once
+    const allRiders = await this.find({ role: 'rider' })
+      .select('_id name totalDeliveries.count rating')
+      .lean();
+
+    console.log(`📈 Found ${allRiders.length} total riders`);
+
+    // Sort ALL riders by delivery count (descending), then by rating
+    const sortedRiders = allRiders.sort((a, b) => {
+      const aDeliveries = a.totalDeliveries?.count || 0;
+      const bDeliveries = b.totalDeliveries?.count || 0;
+      
+      // First sort by delivery count
+      if (bDeliveries !== aDeliveries) {
+        return bDeliveries - aDeliveries;
+      }
+      
+      // If same delivery count, sort by rating
+      return (b.rating || 0) - (a.rating || 0);
+    });
+
+    // Calculate ranks for ALL riders
+    const rankingUpdates = [];
+    for (let i = 0; i < sortedRiders.length; i++) {
+      const rider = sortedRiders[i];
+      const rank = i + 1;
+      
+      rankingUpdates.push({
+        updateOne: {
+          filter: { _id: rider._id },
+          update: {
+            $set: {
+              'ranking.rank': rank,
+              'ranking.totalAgents': sortedRiders.length,
+              'ranking.lastUpdated': new Date()
+            }
+          }
+        }
+      });
+    }
+
+    // Bulk update ALL riders with consistent ranking data
+    if (rankingUpdates.length > 0) {
+      await this.bulkWrite(rankingUpdates);
+      console.log(`✅ Updated rankings for ${rankingUpdates.length} riders`);
+    }
+
+    return {
+      success: true,
+      totalRiders: sortedRiders.length,
+      updatedCount: rankingUpdates.length
+    };
+  } catch (error) {
+    console.error('❌ Error updating all rankings:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Get ranking as formatted string
+userSchema.methods.getRankingString = function () {
+  const { rank, totalAgents } = this.ranking;
+  if (rank === 0 || totalAgents === 0) return 'Unranked';
+  return `${rank}/${totalAgents}`;
+};
+
+// Push delivery metadata - UPDATED to update ALL rankings after delivery
+userSchema.methods.pushDeliveryMeta = function (deliveryMeta) {
+  if (!this.totalDeliveries) {
+    this.totalDeliveries = { count: 0, deliveries: [] };
+  }
+  
+  this.totalDeliveries.deliveries.unshift(deliveryMeta);
+  this.totalDeliveries.count = (this.totalDeliveries.count || 0) + 1;
+
+  const MAX_DELIVERIES_STORED = Number(process.env.MAX_DELIVERIES_STORED) || 1000;
+  if (this.totalDeliveries.deliveries.length > MAX_DELIVERIES_STORED) {
+    this.totalDeliveries.deliveries = this.totalDeliveries.deliveries.slice(0, MAX_DELIVERIES_STORED);
+  }
+
+  // Update ALL rankings after delivery completion (for riders)
+  if (this.role === 'rider' && deliveryMeta.status === 'completed') {
+    console.log(`📦 Delivery completed, updating ALL rankings...`);
+    
+    // Update ALL rankings after a short delay
+    setTimeout(async () => {
+      try {
+        await mongoose.model('User').updateAllRankings();
+      } catch (error) {
+        console.error('Error updating rankings after delivery:', error);
+      }
+    }, 1000);
+  }
+};
+
+// EMERGENCY FIX: Force update ranking for all riders
+userSchema.statics.fixAllRankings = async function () {
+  try {
+    console.log('🚨 FORCE UPDATING ALL RANKINGS CONSISTENTLY...');
+    
+    const result = await this.updateAllRankings();
+    
+    if (result.success) {
+      console.log(`🎉 Successfully fixed rankings for ${result.totalRiders} riders`);
+    } else {
+      console.log('❌ Failed to fix rankings');
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error in fixAllRankings:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Pre-save hook
+userSchema.pre("save", function (next) {
+  this.checkProfileComplete();
+  this.computeIsActive();
+  next();
 });
 
-module.exports = mongoose.model('User', userSchema);
+// Post-save hook: update ALL rankings after user save
+userSchema.post("save", async function (doc) {
+  try {
+    const Account = require("./Account");
+    const account = await Account.findOne({ user: doc._id });
+
+    if (account) {
+      const desiredStatus = doc.isActive ? "active" : "inactive";
+      if (account.status !== desiredStatus) {
+        account.status = desiredStatus;
+        await account.save();
+      }
+    } else if (doc.role === "rider") {
+      await Account.create({
+        user: doc._id,
+        vehicleType: doc.vehicleType,
+        status: doc.isActive ? "active" : "inactive",
+      });
+    }
+
+    // Update ALL rankings after save if this is a rider
+    if (doc.role === 'rider') {
+      setTimeout(async () => {
+        try {
+          await mongoose.model('User').updateAllRankings();
+        } catch (error) {
+          console.error('Error updating rankings after user save:', error);
+        }
+      }, 1000);
+    }
+  } catch (err) {
+    console.error("Error syncing account after user save:", err.message);
+  }
+});
+
+module.exports = mongoose.model("User", userSchema);
