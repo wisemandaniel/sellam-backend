@@ -147,7 +147,7 @@
 //       // Create account data
 //       const accountData = {
 //         user: user._id,
-//         vehicleType: user.vehicleType || 'motorcycle',
+//         vehicleType: user.vehicleType || 'bike',
 //         status: 'active'
 //       };
 
@@ -236,7 +236,7 @@
 //       address: user.address || '',
 //       profileImage: user.profileImage || '',
 //       role: user.role || 'client',
-//       vehicleType: user.vehicleType || 'motorcycle',
+//       vehicleType: user.vehicleType || 'bike',
 //       licensePlate: user.licensePlate || '',
 //       rating: account?.averageRating || 4.5,
 //       totalDeliveries: account?.totalDeliveries || 0,
@@ -803,7 +803,7 @@
 //       name,
 //       phone: formattedPhone,
 //       address,
-//       vehicleType: vehicleType || 'motorcycle',
+//       vehicleType: vehicleType || 'bike',
 //       licensePlate: vehicleType === 'car' ? licensePlate : ''
 //     };
 
@@ -1119,7 +1119,7 @@ const createOrUpdateUser = async (req, res) => {
         account = await Account.create({
           user: user._id,
           status: user.isActive ? "active" : "inactive", // only active if user isActive
-          vehicleType: user.vehicleType || "motorcycle",
+          vehicleType: user.vehicleType || "bike",
         });
       }
     }
@@ -1155,12 +1155,25 @@ const createOrUpdateUser = async (req, res) => {
 
 // [UPDATED LOGIC] Login with device & optional OTP
 const loginUser = async (req, res) => {
+  console.log('USER:::: ', req.body);
+  
   try {
-    const { phone, role = "client", deviceId, deviceInfo = {} } = req.body;
-    if (!phone || !deviceId)
+    const { phone, role, deviceId, deviceInfo = {} } = req.body;
+    if (!role) {
       return res
         .status(400)
-        .json({ success: false, message: "Phone and deviceId required" });
+        .json({ success: false, message: "User role is required" });
+    }
+    if (!phone) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User Phone number is required" });
+    }
+    if (!deviceId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User Device ID is required" });
+    }
 
     const formattedPhone = formatPhoneNumber(phone);
     let user = await User.findOne({ phone: formattedPhone });
@@ -1170,6 +1183,9 @@ const loginUser = async (req, res) => {
       user = await User.create({ phone: formattedPhone, role });
     }
 
+    console.log('USER::: ', user);
+    
+
     // Ensure rider account exists (safe version)
     if (role === "rider") {
       let account = await Account.findOne({ user: user._id });
@@ -1177,7 +1193,7 @@ const loginUser = async (req, res) => {
         account = await Account.create({
           user: user._id,
           status: user.isActive ? "active" : "inactive",
-          vehicleType: user.vehicleType || "motorcycle",
+          vehicleType: user.vehicleType || "bike",
         });
       }
     }
@@ -1290,7 +1306,7 @@ const verifyOTP = async (req, res) => {
         account = await Account.create({
           user: user._id,
           status: user.isActive ? "active" : "inactive",
-          vehicleType: user.vehicleType || "motorcycle",
+          vehicleType: user.vehicleType || "bike",
         });
       }
     }
@@ -1340,6 +1356,9 @@ const getProfile = async (req, res) => {
         .status(404)
         .json({ success: false, message: "User not found" });
     const account = await Account.findOne({ user: user._id });
+    if (user.role === 'rider') {
+      await user.updateRanking();
+    }
     res.json({ success: true, data: user, account });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1374,7 +1393,7 @@ const updateProfile = async (req, res) => {
       name: name?.trim() || "",
       phone: formattedPhone,
       address: address?.trim() || "",
-      vehicleType: vehicleType || "motorcycle",
+      vehicleType: vehicleType || "bike",
       licensePlate: vehicleType === "car" ? licensePlate || "" : "",
     };
 
@@ -1382,6 +1401,8 @@ const updateProfile = async (req, res) => {
       new: true,
       runValidators: true,
     });
+
+
 
     if (!user)
       return res

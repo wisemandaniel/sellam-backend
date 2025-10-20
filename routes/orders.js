@@ -4,6 +4,7 @@ const {
   getMyOrders,
   getOrder,
   getPendingOrders,
+  getMyCompletedDeliveries, // ✅ Import new function
   acceptDelivery,
   rejectDelivery,
   getMyActiveDeliveries,
@@ -28,6 +29,7 @@ router.get('/:id', getOrder); // Customers view specific order
 // ====================
 router.get('/status/pending', authorize('rider', 'admin'), getPendingOrders);
 router.get('/my-deliveries/active', authorize('rider', 'admin'), getMyActiveDeliveries);
+router.get('/my-deliveries/completed', authorize('rider', 'admin'), getMyCompletedDeliveries); // ✅ New endpoint
 router.patch('/:orderId/accept', authorize('rider', 'admin'), acceptDelivery);
 router.patch('/:orderId/reject', authorize('rider', 'admin'), rejectDelivery);
 router.patch('/:orderId/status', authorize('rider', 'admin'), updateOrderStatus);

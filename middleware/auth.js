@@ -6,6 +6,17 @@ const protect = async (req, res, next) => {
   console.log('🔐 AUTH - Request URL:', req.originalUrl);
   console.log('🔐 AUTH - Request method:', req.method);
   console.log('🔐 AUTH - Headers authorization present:', !!req.headers.authorization);
+
+  console.log('🔐 ========== JWT TOKEN DEBUG ==========');
+  console.log('🔐 AUTH - JWT_SECRET length:', process.env.JWT_SECRET?.length);
+  console.log('🔐 AUTH - JWT_SECRET first 10 chars:', process.env.JWT_SECRET?.substring(0, 10) + '...');
+
+
+   // Detailed environment debugging
+  console.log('🔐 AUTH - JWT_SECRET:', process.env.JWT_SECRET);
+  console.log('🔐 AUTH - JWT_SECRET length:', process.env.JWT_SECRET?.length);
+  console.log('🔐 AUTH - JWT_SECRET first 10 chars:', process.env.JWT_SECRET?.substring(0, 10));
+  console.log('🔐 AUTH - NODE_ENV:', process.env.NODE_ENV);
   
   try {
     let token;
