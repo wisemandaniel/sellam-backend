@@ -88,7 +88,7 @@ const getBusinessProducts = async (req, res) => {
     }
 
     const products = await Product.find({ store: businessId })
-      .populate('store', 'name phone deliveryFee deliveryTime');
+      .populate('business', 'name phone deliveryFee deliveryTime');
 
     res.json(products);
   } catch (error) {
