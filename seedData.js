@@ -23,7 +23,7 @@ const connectDB = async () => {
 };
 
 // Expanded sample data with more stores
-const sampleStores = [
+const sampleBusinesses = [
   // Restaurants
   {
     name: "Bella Italia Restaurant",
@@ -193,18 +193,18 @@ const seedDatabase = async () => {
     await connectDB();
 
     // Import models
-    const Store = require('./models/Store');
+    const Business = require('./models/Business');
     const Product = require('./models/Product');
 
     // Clear existing data
     console.log('🗑️  Clearing existing data...');
-    await Store.deleteMany();
+    await Business.deleteMany();
     await Product.deleteMany();
     
-    // Create stores
-    console.log('🏪 Creating stores...');
-    const createdStores = await Store.insertMany(sampleStores);
-    console.log(`✅ Created ${createdStores.length} stores`);
+    // Create Businesses
+    console.log('🏪 Creating Businesses...');
+    const createdBusinesses = await Business.insertMany(sampleBusinesses);
+    console.log(`✅ Created ${createdBusinesses.length} Businesss`);
 
     // Create expanded sample products for each store
     const sampleProducts = [
@@ -217,7 +217,8 @@ const seedDatabase = async () => {
         category: "Pizza",
         inStock: true,
         discount: 0,
-        store: createdStores[0]._id,
+        store: createdBusinesses[0]._id,
+        business: createdBusinesses[0]._id,
         tags: ["vegetarian", "italian"]
       },
       {
@@ -228,7 +229,8 @@ const seedDatabase = async () => {
         category: "Pasta",
         inStock: true,
         discount: 10,
-        store: createdStores[0]._id,
+        store: createdBusinesses[0]._id,
+        business: createdBusinesses[1]._id,
         tags: ["pasta", "creamy"]
       },
       {
@@ -239,7 +241,8 @@ const seedDatabase = async () => {
         category: "Dessert",
         inStock: true,
         discount: 0,
-        store: createdStores[0]._id,
+        store: createdBusinesses[0]._id,
+        business: createdBusinesses[2]._id,
         tags: ["dessert", "coffee"]
       },
 
@@ -252,7 +255,8 @@ const seedDatabase = async () => {
         category: "Main Course",
         inStock: true,
         discount: 5,
-        store: createdStores[1]._id,
+        store: createdBusinesses[1]._id,
+        business: createdBusinesses[3]._id,
         tags: ["spicy", "chicken"]
       },
       {
@@ -263,7 +267,8 @@ const seedDatabase = async () => {
         category: "Appetizer",
         inStock: true,
         discount: 0,
-        store: createdStores[1]._id,
+        store: createdBusinesses[1]._id,
+        business: createdBusinesses[4]._id,
         tags: ["vegetarian", "crispy"]
       },
 
@@ -276,7 +281,8 @@ const seedDatabase = async () => {
         category: "Burgers",
         inStock: true,
         discount: 15,
-        store: createdStores[2]._id,
+        store: createdBusinesses[2]._id,
+        business: createdBusinesses[5]._id,
         tags: ["beef", "popular"]
       },
       {
@@ -287,7 +293,8 @@ const seedDatabase = async () => {
         category: "Sides",
         inStock: true,
         discount: 0,
-        store: createdStores[2]._id,
+        store: createdBusinesses[2]._id,
+        business: createdBusinesses[6]._id,
         tags: ["side", "crispy"]
       },
 
@@ -300,7 +307,8 @@ const seedDatabase = async () => {
         category: "Pastry",
         inStock: true,
         discount: 0,
-        store: createdStores[3]._id,
+        store: createdBusinesses[3]._id,
+        business: createdBusinesses[7]._id,
         tags: ["breakfast", "french"]
       },
       {
@@ -311,7 +319,8 @@ const seedDatabase = async () => {
         category: "Main Course",
         inStock: true,
         discount: 8,
-        store: createdStores[3]._id,
+        store: createdBusinesses[3]._id,
+        business: createdBusinesses[8]._id,
         tags: ["beef", "wine"]
       },
 
@@ -324,7 +333,8 @@ const seedDatabase = async () => {
         category: "Fruits",
         inStock: true,
         discount: 5,
-        store: createdStores[4]._id,
+        store: createdBusinesses[4]._id,
+        business: createdBusinesses[9]._id,
         tags: ["organic", "fruit"]
       },
       {
@@ -335,7 +345,8 @@ const seedDatabase = async () => {
         category: "Bakery",
         inStock: true,
         discount: 0,
-        store: createdStores[4]._id,
+        store: createdBusinesses[4]._id,
+        business: createdBusinesses[0]._id,
         tags: ["bread", "healthy"]
       },
       {
@@ -346,7 +357,8 @@ const seedDatabase = async () => {
         category: "Dairy",
         inStock: true,
         discount: 0,
-        store: createdStores[4]._id,
+        store: createdBusinesses[4]._id,
+        business: createdBusinesses[0]._id,
         tags: ["dairy", "fresh"]
       },
 
@@ -359,7 +371,8 @@ const seedDatabase = async () => {
         category: "Fruits",
         inStock: true,
         discount: 10,
-        store: createdStores[5]._id,
+        store: createdBusinesses[5]._id,
+        business: createdBusinesses[0]._id,
         tags: ["organic", "healthy"]
       },
       {
@@ -370,7 +383,8 @@ const seedDatabase = async () => {
         category: "Grains",
         inStock: true,
         discount: 0,
-        store: createdStores[5]._id,
+        store: createdBusinesses[5]._id,
+        business: createdBusinesses[0]._id,
         tags: ["organic", "gluten-free"]
       },
 
@@ -383,7 +397,8 @@ const seedDatabase = async () => {
         category: "Beverages",
         inStock: true,
         discount: 0,
-        store: createdStores[6]._id,
+        store: createdBusinesses[6]._id,
+        business: createdBusinesses[0]._id,
         tags: ["soda", "cold"]
       },
       {
@@ -394,7 +409,8 @@ const seedDatabase = async () => {
         category: "Snacks",
         inStock: true,
         discount: 15,
-        store: createdStores[6]._id,
+        store: createdBusinesses[6]._id,
+        business: createdBusinesses[0]._id,
         tags: ["snack", "crunchy"]
       },
 
@@ -407,7 +423,8 @@ const seedDatabase = async () => {
         category: "Supplements",
         inStock: true,
         discount: 0,
-        store: createdStores[7]._id,
+        store: createdBusinesses[7]._id,
+        business: createdBusinesses[0]._id,
         tags: ["vitamin", "immune"]
       },
       {
@@ -418,7 +435,8 @@ const seedDatabase = async () => {
         category: "First Aid",
         inStock: true,
         discount: 0,
-        store: createdStores[7]._id,
+        store: createdBusinesses[7]._id,
+        business: createdBusinesses[0]._id,
         tags: ["first-aid", "essential"]
       },
 
@@ -431,7 +449,8 @@ const seedDatabase = async () => {
         category: "Medication",
         inStock: true,
         discount: 5,
-        store: createdStores[8]._id,
+        store: createdBusinesses[8]._id,
+        business: createdBusinesses[0]._id,
         tags: ["pain-relief", "fast-acting"]
       },
 
@@ -444,7 +463,8 @@ const seedDatabase = async () => {
         category: "Audio",
         inStock: true,
         discount: 20,
-        store: createdStores[9]._id,
+        store: createdBusinesses[9]._id,
+        business: createdBusinesses[0]._id,
         tags: ["wireless", "bluetooth"]
       },
       {
@@ -455,7 +475,8 @@ const seedDatabase = async () => {
         category: "Accessories",
         inStock: true,
         discount: 10,
-        store: createdStores[9]._id,
+        store: createdBusinesses[9]._id,
+        business: createdBusinesses[0]._id,
         tags: ["protective", "accessory"]
       },
 
@@ -468,7 +489,8 @@ const seedDatabase = async () => {
         category: "Accessories",
         inStock: true,
         discount: 0,
-        store: createdStores[10]._id,
+        store: createdBusinesses[10]._id,
+        business: createdBusinesses[0]._id,
         tags: ["charging", "cable"]
       },
       {
@@ -479,7 +501,8 @@ const seedDatabase = async () => {
         category: "Accessories",
         inStock: true,
         discount: 15,
-        store: createdStores[10]._id,
+        store: createdBusinesses[10]._id,
+        business: createdBusinesses[0]._id,
         tags: ["portable", "charging"]
       }
     ];
@@ -489,7 +512,7 @@ const seedDatabase = async () => {
     console.log(`✅ Created ${createdProducts.length} products`);
 
     console.log('🎉 Database seeded successfully!');
-    console.log(`🏪 Total Stores: ${createdStores.length}`);
+    console.log(`🏪 Total Stores: ${createdBusinesses.length}`);
     console.log(`📦 Total Products: ${createdProducts.length}`);
     
     process.exit(0);
