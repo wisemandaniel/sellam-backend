@@ -1148,14 +1148,251 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
+
+// ====================
+// ADMIN PANEL FUNCTIONS
+// ====================
+
+// @desc    Get all orders (for admin panel)
+// @route   GET /api/orders
+// @access  Private/Admin
+const getAllOrders = async (req, res) => {
+  try {
+    console.log('📦 ADMIN - Fetching all orders...');
+
+    const orders = await Order.find()
+      .populate('user', 'name phone email')
+      .populate('rider', 'name phone')
+      .populate('items.product', 'name image price')
+      .populate('items.store', 'name phone')
+      .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt')
+      .sort({ createdAt: -1 });
+
+    console.log(`✅ ADMIN - Found ${orders.length} total orders`);
+
+    // Format orders for frontend
+    const formattedOrders = orders.map(order => ({
+      id: order._id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      total: order.total,
+      deliveryFee: order.deliveryFee,
+      subtotal: order.subtotal,
+      customer: {
+        name: order.user?.name || 'Customer',
+        phone: order.user?.phone || order.phone,
+        email: order.user?.email || 'N/A'
+      },
+      rider: order.rider ? {
+        name: order.rider.name,
+        phone: order.rider.phone
+      } : null,
+      items: order.items.map(item => ({
+        name: item.product?.name || 'Product not found',
+        image: item.product?.image || '',
+        price: item.price,
+        quantity: item.quantity,
+        store: item.store?.name || 'Store not found'
+      })),
+      deliveryAddress: order.deliveryAddress,
+      phone: order.phone,
+      notes: order.notes || '',
+      createdAt: order.createdAt,
+      acceptedAt: order.acceptedAt,
+      pickedUpAt: order.pickedUpAt,
+      deliveredAt: order.deliveredAt,
+      cancelledAt: order.cancelledAt
+    }));
+
+    res.json({
+      success: true,
+      count: formattedOrders.length,
+      data: formattedOrders,
+      message: `Found ${formattedOrders.length} orders`
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - GET ALL ORDERS ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update order (for admin panel)
+// @route   PUT /api/orders/:id
+// @access  Private/Admin
+const updateOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    console.log(`✏️ ADMIN - Updating order ${id}:`, updateData);
+
+    // Validate order exists
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Allowed fields for admin update
+    const allowedUpdates = ['status', 'deliveryAddress', 'phone', 'notes', 'rider'];
+    const updates = {};
+    
+    Object.keys(updateData).forEach(key => {
+      if (allowedUpdates.includes(key)) {
+        updates[key] = updateData[key];
+      }
+    });
+
+    // Add timestamps based on status changes
+    if (updates.status && updates.status !== order.status) {
+      const timestampField = {
+        'accepted': 'acceptedAt',
+        'picked_up': 'pickedUpAt', 
+        'delivered': 'deliveredAt',
+        'cancelled': 'cancelledAt'
+      }[updates.status];
+      
+      if (timestampField && !order[timestampField]) {
+        updates[timestampField] = new Date();
+      }
+    }
+
+    const updatedOrder = await Order.findByIdAndUpdate(
+      id,
+      updates,
+      { new: true, runValidators: true }
+    )
+    .populate('user', 'name phone email')
+    .populate('rider', 'name phone')
+    .populate('items.product', 'name image price')
+    .populate('items.store', 'name phone');
+
+    console.log(`✅ ADMIN - Order ${id} updated successfully`);
+
+    res.json({
+      success: true,
+      data: {
+        id: updatedOrder._id,
+        orderNumber: updatedOrder.orderNumber,
+        status: updatedOrder.status,
+        total: updatedOrder.total,
+        deliveryFee: updatedOrder.deliveryFee,
+        customer: {
+          name: updatedOrder.user?.name || 'Customer',
+          phone: updatedOrder.user?.phone || updatedOrder.phone
+        },
+        rider: updatedOrder.rider ? {
+          name: updatedOrder.rider.name,
+          phone: updatedOrder.rider.phone
+        } : null,
+        items: updatedOrder.items.map(item => ({
+          name: item.product?.name || 'Product not found',
+          image: item.product?.image || '',
+          price: item.price,
+          quantity: item.quantity,
+          store: item.store?.name || 'Store not found'
+        })),
+        deliveryAddress: updatedOrder.deliveryAddress,
+        phone: updatedOrder.phone,
+        notes: updatedOrder.notes || '',
+        createdAt: updatedOrder.createdAt,
+        acceptedAt: updatedOrder.acceptedAt,
+        pickedUpAt: updatedOrder.pickedUpAt,
+        deliveredAt: updatedOrder.deliveredAt,
+        cancelledAt: updatedOrder.cancelledAt
+      },
+      message: 'Order updated successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - UPDATE ORDER ERROR:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update order',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Delete order (for admin panel)
+// @route   DELETE /api/orders/:id
+// @access  Private/Admin
+const deleteOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log(`🗑️ ADMIN - Deleting order ${id}`);
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Prevent deletion of orders that are in progress
+    if (['accepted', 'picked_up'].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete order that is in progress. Cancel it first.'
+      });
+    }
+
+    await Order.findByIdAndDelete(id);
+
+    console.log(`✅ ADMIN - Order ${id} deleted successfully`);
+
+    res.json({
+      success: true,
+      message: 'Order deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - DELETE ORDER ERROR:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order ID'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete order',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createOrder,
   getMyOrders,
   getOrder,
   getPendingOrders,
-  getMyCompletedDeliveries, // ✅ Added new endpoint
+  getMyCompletedDeliveries,
   acceptDelivery,
   rejectDelivery,
   getMyActiveDeliveries,
   updateOrderStatus,
+  // NEW ADMIN FUNCTIONS
+  getAllOrders,
+  updateOrder,
+  deleteOrder
 };
