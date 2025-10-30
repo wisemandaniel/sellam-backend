@@ -1067,6 +1067,251 @@ const sendOTPInternal = async (phoneNumber) => {
     .verifications.create({ to: phoneNumber, channel: "sms" });
 };
 
+// ========== ADMIN PANEL FUNCTIONS ==========
+
+// @desc    Get all users (for admin panel)
+// @route   GET /api/users
+// @access  Private/Admin
+const getUsers = async (req, res) => {
+  try {
+    console.log('👥 GET USERS - Admin request received');
+    
+    const users = await User.find()
+      .select('-password -verifiedDevices -pendingDeviceVerification')
+      .sort({ createdAt: -1 });
+    
+    console.log(`✅ Found ${users.length} users`);
+    
+    res.json(users);
+  } catch (error) {
+    console.error('❌ GET USERS ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching users'
+    });
+  }
+};
+
+// @desc    Create user (for admin panel)
+// @route   POST /api/users
+// @access  Private/Admin
+const addUser = async (req, res) => {
+  try {
+    console.log('👤 ADD USER - Admin request:', req.body);
+    
+    const { name, email, phone, role, password, address, vehicleType } = req.body;
+
+    // Validate required fields
+    if (!name || !email || !phone || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, phone, and role are required'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      $or: [
+        { email: email.toLowerCase().trim() },
+        { phone: phone.trim() }
+      ]
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or phone already exists'
+      });
+    }
+
+    // Create user
+    const userData = {
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      phone: phone.trim(),
+      role,
+      address: address || '',
+      vehicleType: vehicleType || 'bike',
+      isActive: true,
+      phoneVerified: true,
+      isProfileComplete: true
+    };
+
+    // Add password only for admin/vendor roles
+    if (['admin', 'vendor'].includes(role) && password) {
+      userData.password = password;
+    }
+
+    const user = await User.create(userData);
+
+    // Create account if rider
+    if (user.role === 'rider') {
+      await Account.create({
+        user: user._id,
+        vehicleType: user.vehicleType,
+        status: 'active'
+      });
+    }
+
+    // Remove sensitive data from response
+    const userResponse = user.toObject();
+    delete userResponse.password;
+    delete userResponse.verifiedDevices;
+    delete userResponse.pendingDeviceVerification;
+
+    console.log('✅ USER CREATED:', user.email);
+
+    res.status(201).json(userResponse);
+
+  } catch (error) {
+    console.error('❌ ADD USER ERROR:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or phone already exists'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Error creating user'
+    });
+  }
+};
+
+// @desc    Update user (for admin panel)
+// @route   PUT /api/users/:id
+// @access  Private/Admin
+const updateUser = async (req, res) => {
+  try {
+    console.log('✏️ UPDATE USER - Admin request for ID:', req.params.id, req.body);
+    
+    const { name, email, phone, role, isActive, address, vehicleType } = req.body;
+
+    // Find user
+    let user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if email/phone is taken by another user
+    if (email || phone) {
+      const existingUser = await User.findOne({
+        $and: [
+          { _id: { $ne: req.params.id } },
+          {
+            $or: [
+              { email: email?.toLowerCase().trim() },
+              { phone: phone?.trim() }
+            ]
+          }
+        ]
+      });
+
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email or phone already taken by another user'
+        });
+      }
+    }
+
+    // Update user
+    const updateData = {};
+    if (name) updateData.name = name.trim();
+    if (email) updateData.email = email.toLowerCase().trim();
+    if (phone) updateData.phone = phone.trim();
+    if (role) updateData.role = role;
+    if (typeof isActive !== 'undefined') updateData.isActive = isActive;
+    if (address) updateData.address = address;
+    if (vehicleType) updateData.vehicleType = vehicleType;
+
+    user = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).select('-password -verifiedDevices -pendingDeviceVerification');
+
+    // Update account status if rider
+    if (user.role === 'rider') {
+      await Account.findOneAndUpdate(
+        { user: user._id },
+        { status: user.isActive ? 'active' : 'inactive' }
+      );
+    }
+
+    console.log('✅ USER UPDATED:', user.email);
+
+    res.json(user);
+
+  } catch (error) {
+    console.error('❌ UPDATE USER ERROR:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email or phone already taken by another user'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Error updating user'
+    });
+  }
+};
+
+// @desc    Delete user (for admin panel)
+// @route   DELETE /api/users/:id
+// @access  Private/Admin
+const deleteUser = async (req, res) => {
+  try {
+    console.log('🗑️ DELETE USER - Admin request for ID:', req.params.id);
+    
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Don't allow deleting yourself
+    if (user._id.toString() === req.user.id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete your own account'
+      });
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+
+    // Also delete associated account if exists
+    await Account.findOneAndDelete({ user: req.params.id });
+
+    console.log('✅ USER DELETED:', user.email);
+
+    res.json({
+      success: true,
+      message: 'User deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ DELETE USER ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting user'
+    });
+  }
+};
+
+// ========== EXISTING FUNCTIONS (KEEP THESE) ==========
+
 //[UPDATED LOGIC] Handles both new user creation and returning existing users
 const createOrUpdateUser = async (req, res) => {
   try {
@@ -1402,8 +1647,6 @@ const updateProfile = async (req, res) => {
       runValidators: true,
     });
 
-
-
     if (!user)
       return res
         .status(404)
@@ -1509,7 +1752,15 @@ const removeDevice = async (req, res) => {
   }
 };
 
+// Export all functions
 module.exports = {
+  // Admin panel functions
+  getUsers,
+  addUser,
+  updateUser,
+  deleteUser,
+  
+  // Existing functions
   createOrUpdateUser,
   loginUser,
   verifyOTP,

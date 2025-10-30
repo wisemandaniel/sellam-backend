@@ -7,15 +7,9 @@ const protect = async (req, res, next) => {
   console.log('🔐 AUTH - Request method:', req.method);
   console.log('🔐 AUTH - Headers authorization present:', !!req.headers.authorization);
 
-  console.log('🔐 ========== JWT TOKEN DEBUG ==========');
+  // Detailed environment debugging
   console.log('🔐 AUTH - JWT_SECRET length:', process.env.JWT_SECRET?.length);
-  console.log('🔐 AUTH - JWT_SECRET first 10 chars:', process.env.JWT_SECRET?.substring(0, 10) + '...');
-
-
-   // Detailed environment debugging
-  console.log('🔐 AUTH - JWT_SECRET:', process.env.JWT_SECRET);
-  console.log('🔐 AUTH - JWT_SECRET length:', process.env.JWT_SECRET?.length);
-  console.log('🔐 AUTH - JWT_SECRET first 10 chars:', process.env.JWT_SECRET?.substring(0, 10));
+  console.log('🔐 AUTH - JWT_EXPIRE:', process.env.JWT_EXPIRE);
   console.log('🔐 AUTH - NODE_ENV:', process.env.NODE_ENV);
   
   try {
@@ -39,7 +33,12 @@ const protect = async (req, res, next) => {
     try {
       console.log('🔐 AUTH - Verifying token with JWT secret...');
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      console.log('🔐 AUTH - Token decoded successfully:', decoded);
+      console.log('🔐 AUTH - Token decoded successfully:', { 
+        id: decoded.id, 
+        email: decoded.email, 
+        role: decoded.role,
+        exp: decoded.exp 
+      });
       
       console.log('🔐 AUTH - Finding user by ID:', decoded.id);
       req.user = await User.findById(decoded.id).select('-password');
@@ -51,12 +50,41 @@ const protect = async (req, res, next) => {
           message: 'Not authorized, user not found' 
         });
       }
+
+      // Check if user is active
+      // if (!req.user.isActive && !req.user.role === 'admin') {
+      //   console.log('❌ AUTH - User account is inactive:', decoded.id);
+      //   return res.status(401).json({ 
+      //     success: false,
+      //     message: 'Account is deactivated. Please contact administrator.' 
+      //   });
+      // }
       
-      console.log('✅ AUTH - User found:', req.user._id, req.user.role);
+      // console.log('✅ AUTH - User found:', { 
+      //   id: req.user._id, 
+      //   role: req.user.role, 
+      //   email: req.user.email,
+      //   isActive: req.user.isActive 
+      // });
       console.log('🔐 ========== AUTH MIDDLEWARE SUCCESS ==========');
       next();
     } catch (error) {
       console.log('❌ AUTH - Token verification failed:', error.message);
+      
+      if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({ 
+          success: false,
+          message: 'Token expired. Please login again.' 
+        });
+      }
+      
+      if (error.name === 'JsonWebTokenError') {
+        return res.status(401).json({ 
+          success: false,
+          message: 'Invalid token. Please login again.' 
+        });
+      }
+      
       return res.status(401).json({ 
         success: false,
         message: 'Not authorized, token failed' 
