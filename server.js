@@ -29,20 +29,8 @@ const getNetworkIP = () => {
 const networkIP = getNetworkIP();
 const PORT = process.env.PORT || 5000;
 
-// CORS Configuration - allow all network access for development
-app.use(cors({
-  origin: [
-    'http://localhost:3000', 
-    'http://localhost:5173', 
-    `http://${networkIP}:3000`,
-    `http://${networkIP}:5173`,
-    'https://172.20.221.181',
-    `http://${networkIP}:${PORT}`
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// CORS Configuration - Allow requests from ANY origin
+app.use(cors());
 
 // Middleware
 app.use(express.json());
