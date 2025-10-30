@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
+const os = require('os');
 
 // Load env vars
 dotenv.config();
@@ -11,50 +12,116 @@ connectDB();
 
 const app = express();
 
+// Get network IP address
+const getNetworkIP = () => {
+  const interfaces = os.networkInterfaces();
+  for (const interfaceName in interfaces) {
+    for (const interface of interfaces[interfaceName]) {
+      // Skip internal and non-IPv4 addresses
+      if (interface.family === 'IPv4' && !interface.internal) {
+        return interface.address;
+      }
+    }
+  }
+  return 'localhost';
+};
+
+const networkIP = getNetworkIP();
+const PORT = process.env.PORT || 5000;
+
+// CORS Configuration - allow all network access for development
+app.use(cors({
+  origin: [
+    'http://localhost:3000', 
+    'http://localhost:5173', 
+    `http://${networkIP}:3000`,
+    `http://${networkIP}:5173`,
+    'https://172.20.221.181',
+    `http://${networkIP}:${PORT}`
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 // Middleware
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Simple test route
+// Routes
 app.get('/', (req, res) => {
-  res.json({ message: 'Food Delivery API is working!' });
+  res.json({ 
+    success: true,
+    message: 'Food Delivery API is working!',
+    version: '1.0.0',
+    networkAccess: true,
+    yourIP: req.ip,
+    serverIP: networkIP
+  });
 });
 
-// Health check route
+// Health check
 app.get('/api/health', (req, res) => {
   res.json({ 
+    success: true,
     message: 'Server is running', 
-    timestamp: new Date().toISOString() 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    networkIP: networkIP,
+    port: PORT
   });
 });
 
 // API Routes
+app.use('/api/auth', require('./routes/auth')); 
 app.use('/api/stores', require('./routes/stores'));
 app.use('/api/products', require('./routes/products'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/cart', require('./routes/carts'));
 
-// 404 handler - CORRECT WAY
+// Frontend matching routes
+app.use('/api/businesses', require('./routes/businesses'));
+app.use('/api/riders', require('./routes/riders'));
+app.use('/api/dashboard', require('./routes/dashboard'));
+
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
+    success: false,
     message: 'Route not found',
-    path: req.originalUrl 
+    path: req.originalUrl,
+    networkIP: networkIP
   });
 });
 
-// Error handling middleware
+// Error handling
 app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
+  console.error('❌ Server Error:', err.stack);
   res.status(500).json({ 
+    success: false,
     message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'development' ? err.message : {}
+    error: process.env.NODE_ENV === 'development' ? err.message : {},
+    networkIP: networkIP
   });
 });
 
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n🚀 ========== SERVER STARTED ==========`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
+  console.log(`🔌 Port: ${PORT}`);
+  console.log(`\n📍 Local Access:`);
+  console.log(`   🔗 http://localhost:${PORT}`);
+  console.log(`   🔗 http://127.0.0.1:${PORT}`);
+  console.log(`\n🌐 Network Access:`);
+  console.log(`   🔗 http://${networkIP}:${PORT}`);
+  console.log(`\n📊 API Endpoints:`);
+  console.log(`   🩺 Health: http://${networkIP}:${PORT}/api/health`);
+  console.log(`   🔐 Auth: http://${networkIP}:${PORT}/api/auth`);
+  console.log(`   🏪 Businesses: http://${networkIP}:${PORT}/api/businesses`);
+  console.log(`   📦 Products: http://${networkIP}:${PORT}/api/products`);
+  console.log(`   🚴 Riders: http://${networkIP}:${PORT}/api/riders`);
+  console.log(`\n💡 Frontend Configuration:`);
+  console.log(`   Update your frontend API_BASE_URL to: http://${networkIP}:${PORT}/api`);
+  console.log(`\n=====================================\n`);
 });

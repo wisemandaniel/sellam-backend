@@ -61,16 +61,21 @@ const getStore = async (req, res) => {
 // @access  Public
 const getStoreProducts = async (req, res) => {
   try {
-    const { category, page = 1, limit = 10 } = req.query;
+    const { category, page = 1, limit = 100 } = req.query;
+    
+    // Validate store ID
+    if (!req.params.id) {
+      return res.status(400).json({ message: 'Store ID is required' });
+    }
     
     let query = { store: req.params.id };
     
-    if (category) {
+    if (category && category !== 'all') {
       query.category = category;
     }
 
     const products = await Product.find(query)
-      .populate('store', 'name phone')
+      .populate('store', 'name phone deliveryFee deliveryTime')
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
@@ -84,6 +89,7 @@ const getStoreProducts = async (req, res) => {
       total
     });
   } catch (error) {
+    console.error('Error fetching store products:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
@@ -132,8 +138,11 @@ const deleteStore = async (req, res) => {
       return res.status(404).json({ message: 'Store not found' });
     }
 
-    await store.remove();
-    res.json({ message: 'Store removed' });
+    // Also delete all products associated with this store
+    await Product.deleteMany({ store: req.params.id });
+    
+    await Store.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Store and associated products removed' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
