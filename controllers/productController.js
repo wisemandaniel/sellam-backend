@@ -7,7 +7,7 @@ const Store = require('../models/Store');
 const getAllProducts = async (req, res) => {
   try {
     const products = await Product.find()
-      .populate('store', 'name phone deliveryFee deliveryTime');
+      .populate('business store', 'name phone deliveryFee deliveryTime');
     res.json(products);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });

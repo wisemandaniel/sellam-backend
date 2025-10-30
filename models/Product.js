@@ -38,6 +38,11 @@ const productSchema = new mongoose.Schema({
     ref: 'Store',
     required: true
   },
+  business: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Business',
+    required: true
+  },
   tags: [String]
 }, {
   timestamps: true
