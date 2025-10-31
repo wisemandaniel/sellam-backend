@@ -454,14 +454,14 @@ const createOrderForUser = async (req, res) => {
       });
     }
 
-    // Process items and calculate totals (same as existing logic)
+    // Process items and calculate totals
     let subtotal = 0;
     const orderItems = [];
-    const storeDeliveryFees = new Map();
-    const storeIds = new Set();
+    const businessDeliveryFees = new Map();
+    const businessIds = new Set();
 
     for (const item of items) {
-      const product = await Product.findById(item.product).populate("store");
+      const product = await Product.findById(item.product).populate("business");
 
       if (!product) {
         return res.status(404).json({
@@ -485,26 +485,26 @@ const createOrderForUser = async (req, res) => {
       const itemTotal = price * item.quantity;
       subtotal += itemTotal;
 
-      const storeId = product.store._id.toString();
-      storeIds.add(storeId);
+      const businessId = product.business._id.toString();
+      businessIds.add(businessId);
 
-      if (!storeDeliveryFees.has(storeId)) {
-        storeDeliveryFees.set(storeId, product.store.deliveryFee);
+      if (!businessDeliveryFees.has(businessId)) {
+        businessDeliveryFees.set(businessId, product.business.deliveryFee || 1000);
       }
 
       orderItems.push({
         product: product._id,
-        store: product.store._id,
+        business: product.business._id,
         quantity: item.quantity,
         price: price,
       });
     }
 
     // Calculate delivery fee
-    const totalStoreDeliveryFees = Array.from(
-      storeDeliveryFees.values()
+    const totalBusinessDeliveryFees = Array.from(
+      businessDeliveryFees.values()
     ).reduce((sum, fee) => sum + fee, 0);
-    const deliveryFee = Math.round(totalStoreDeliveryFees);
+    const deliveryFee = Math.round(totalBusinessDeliveryFees);
     const total = subtotal + deliveryFee;
 
     // Generate order number
@@ -532,8 +532,8 @@ const createOrderForUser = async (req, res) => {
     });
 
     await order.populate({
-      path: "items.store",
-      select: "name deliveryTime",
+      path: "items.business",
+      select: "name deliveryTime phone address", // Fixed: changed 'store' to 'business'
     });
 
     await order.populate({
@@ -541,10 +541,10 @@ const createOrderForUser = async (req, res) => {
       select: "name phone email",
     });
 
-    // Send store notifications
+    // Send business notifications (updated function name)
     const notificationResult = await sendStoreNotifications(
       order,
-      Array.from(storeIds)
+      Array.from(businessIds)
     );
 
     // Success response
@@ -566,8 +566,8 @@ const createOrderForUser = async (req, res) => {
           image: item.product.image,
           price: item.price,
           quantity: item.quantity,
-          store: item.store.name,
-          deliveryTime: item.store.deliveryTime,
+          business: item.business.name, // Fixed: changed 'store' to 'business'
+          deliveryTime: item.business.deliveryTime, // Fixed: changed 'store' to 'business'
         })),
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,

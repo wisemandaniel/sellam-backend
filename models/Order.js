@@ -117,9 +117,9 @@ const orderItemSchema = new mongoose.Schema(
       ref: "Product",
       required: true,
     },
-    store: {
+    business: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Store",
+      ref: "Business",
       required: true,
     },
     quantity: { type: Number, required: true, min: 1 },
