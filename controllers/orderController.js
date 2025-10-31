@@ -406,6 +406,200 @@ const createOrder = async (req, res) => {
   }
 };
 
+// Add this to your orderController.js
+
+// @desc    Create order for user (admin only)
+// @route   POST /api/orders/admin/create
+// @access  Private/Admin
+const createOrderForUser = async (req, res) => {
+  try {
+    const { items, deliveryAddress, phone, notes, userId } = req.body;
+
+    // Validate admin permissions
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Admin privileges required."
+      });
+    }
+
+    // Validate required fields
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required to create order on behalf of user"
+      });
+    }
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No items in order",
+      });
+    }
+
+    if (!deliveryAddress || !phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery address and phone are required",
+      });
+    }
+
+    // Verify user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    // Process items and calculate totals (same as existing logic)
+    let subtotal = 0;
+    const orderItems = [];
+    const storeDeliveryFees = new Map();
+    const storeIds = new Set();
+
+    for (const item of items) {
+      const product = await Product.findById(item.product).populate("store");
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: `Product not found: ${item.product}`,
+        });
+      }
+
+      if (!product.inStock) {
+        return res.status(400).json({
+          success: false,
+          message: `${product.name} is out of stock`,
+        });
+      }
+
+      const price =
+        product.discount > 0
+          ? product.price * (1 - product.discount / 100)
+          : product.price;
+
+      const itemTotal = price * item.quantity;
+      subtotal += itemTotal;
+
+      const storeId = product.store._id.toString();
+      storeIds.add(storeId);
+
+      if (!storeDeliveryFees.has(storeId)) {
+        storeDeliveryFees.set(storeId, product.store.deliveryFee);
+      }
+
+      orderItems.push({
+        product: product._id,
+        store: product.store._id,
+        quantity: item.quantity,
+        price: price,
+      });
+    }
+
+    // Calculate delivery fee
+    const totalStoreDeliveryFees = Array.from(
+      storeDeliveryFees.values()
+    ).reduce((sum, fee) => sum + fee, 0);
+    const deliveryFee = Math.round(totalStoreDeliveryFees);
+    const total = subtotal + deliveryFee;
+
+    // Generate order number
+    const orderNumber = await generateOrderNumber();
+
+    // Create order
+    const order = await Order.create({
+      orderNumber,
+      user: userId,
+      items: orderItems,
+      subtotal,
+      deliveryFee,
+      total,
+      deliveryAddress,
+      phone,
+      notes: notes || "",
+      createdBy: req.user._id,
+      isAdminCreated: true
+    });
+
+    // Populate order data
+    await order.populate({
+      path: "items.product",
+      select: "name image price",
+    });
+
+    await order.populate({
+      path: "items.store",
+      select: "name deliveryTime",
+    });
+
+    await order.populate({
+      path: "user",
+      select: "name phone email",
+    });
+
+    // Send store notifications
+    const notificationResult = await sendStoreNotifications(
+      order,
+      Array.from(storeIds)
+    );
+
+    // Success response
+    res.status(201).json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        subtotal: order.subtotal,
+        customer: {
+          name: order.user.name,
+          phone: order.user.phone,
+          email: order.user.email
+        },
+        items: order.items.map((item) => ({
+          name: item.product.name,
+          image: item.product.image,
+          price: item.price,
+          quantity: item.quantity,
+          store: item.store.name,
+          deliveryTime: item.store.deliveryTime,
+        })),
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes,
+        createdAt: order.createdAt,
+        createdBy: 'admin'
+      },
+      notifications: {
+        method: notificationResult.method,
+        count: notificationResult.count,
+        message: notificationResult.message,
+      },
+      message: "Order created successfully for user!",
+    });
+  } catch (error) {
+    console.error("Admin order creation error:", error);
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Order number conflict. Please try again.",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Server error creating order for user",
+      error: error.message,
+    });
+  }
+};
+
 // Get user orders
 const getMyOrders = async (req, res) => {
   try {
@@ -1394,5 +1588,6 @@ module.exports = {
   // NEW ADMIN FUNCTIONS
   getAllOrders,
   updateOrder,
-  deleteOrder
+  deleteOrder,
+  createOrderForUser
 };
