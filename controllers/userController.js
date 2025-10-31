@@ -1102,7 +1102,7 @@ const addUser = async (req, res) => {
     const { name, email, phone, role, password, address, vehicleType } = req.body;
 
     // Validate required fields
-    if (!name || !email || !phone || !role) {
+    if (!name || !phone || !role) {
       return res.status(400).json({
         success: false,
         message: 'Name, email, phone, and role are required'

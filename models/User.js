@@ -28,6 +28,8 @@ const userSchema = new mongoose.Schema(
       type: String, 
       trim: true, 
       default: "", 
+      require: false,
+      unique: true,
       lowercase: true,
       sparse: true
     },
