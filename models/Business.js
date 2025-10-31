@@ -45,7 +45,13 @@ const businessSchema = new mongoose.Schema({
   deliveryTime: {
     type: String,
     default: '30-45 min'
-  }
+  },
+  deliveryFee: {
+    type: Number,
+    required: false,
+    default: 1000,
+    min: 0
+  },
 }, {
   timestamps: true
 });

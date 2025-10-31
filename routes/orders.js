@@ -12,7 +12,8 @@ const {
   // NEW ADMIN ENDPOINTS
   getAllOrders,
   updateOrder,
-  deleteOrder
+  deleteOrder,
+  createOrderForUser
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -41,6 +42,7 @@ router.patch('/:orderId/status', authorize('rider', 'admin'), updateOrderStatus)
 // ====================
 // ADMIN ONLY ROUTES (for frontend admin panel)
 // ====================
+router.post('/admin/create', authorize('admin'), createOrderForUser); // Admin creates order for user
 router.get('/', authorize('admin'), getAllOrders); // Get all orders (admin panel)
 router.put('/:id', authorize('admin'), updateOrder); // Update order (admin panel)
 router.delete('/:id', authorize('admin'), deleteOrder); // Delete order (admin panel)
