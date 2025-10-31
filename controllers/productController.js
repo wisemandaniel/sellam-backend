@@ -1,5 +1,5 @@
 const Product = require('../models/Product');
-const Store = require('../models/Store');
+const Business = require('../models/Business');
 
 // @desc    Get all products (for frontend)
 // @route   GET /api/products
@@ -57,18 +57,18 @@ const getProduct = async (req, res) => {
 const addProduct = async (req, res) => {
   try {
     // Validate required fields
-    const { name, description, price, image, category, store } = req.body;
+    const { name, description, price, image, category, business } = req.body;
     
-    if (!name || !price || !store) {
+    if (!name || !price || !business) {
       return res.status(400).json({ 
         message: 'Please provide all required fields: name, price, store' 
       });
     }
 
     // Verify store exists
-    const storeExists = await Store.findById(store);
+    const storeExists = await Business.findById(business);
     if (!storeExists) {
-      return res.status(404).json({ message: 'Store not found' });
+      return res.status(404).json({ message: 'Business not found' });
     }
 
     const product = await Product.create({
@@ -77,7 +77,7 @@ const addProduct = async (req, res) => {
       price,
       image: image || '',
       category: category || 'food',
-      store
+      business
     });
     
     await product.populate('store');
