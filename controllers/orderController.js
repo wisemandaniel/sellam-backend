@@ -1358,8 +1358,8 @@ const getAllOrders = async (req, res) => {
       .populate('user', 'name phone email')
       .populate('rider', 'name phone')
       .populate('items.product', 'name image price')
-      .populate('items.store', 'name phone')
-      .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt')
+      .populate('items.business', 'name phone address deliveryTime') // Fixed: changed 'store' to 'business'
+      .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated')
       .sort({ createdAt: -1 });
 
     console.log(`✅ ADMIN - Found ${orders.length} total orders`);
@@ -1386,7 +1386,12 @@ const getAllOrders = async (req, res) => {
         image: item.product?.image || '',
         price: item.price,
         quantity: item.quantity,
-        store: item.store?.name || 'Store not found'
+        business: item.business ? { // Fixed: changed 'store' to 'business'
+          name: item.business.name || 'Business not found',
+          phone: item.business.phone || '',
+          address: item.business.address || '',
+          deliveryTime: item.business.deliveryTime || 'N/A'
+        } : null
       })),
       deliveryAddress: order.deliveryAddress,
       phone: order.phone,
@@ -1395,7 +1400,10 @@ const getAllOrders = async (req, res) => {
       acceptedAt: order.acceptedAt,
       pickedUpAt: order.pickedUpAt,
       deliveredAt: order.deliveredAt,
-      cancelledAt: order.cancelledAt
+      cancelledAt: order.cancelledAt,
+      // Additional admin info
+      createdBy: order.createdBy || 'customer',
+      isAdminCreated: order.isAdminCreated || false
     }));
 
     res.json({
