@@ -36,7 +36,7 @@ const productSchema = new mongoose.Schema({
   store: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Store',
-    required: true
+    required: false
   },
   business: {
     type: mongoose.Schema.Types.ObjectId,
