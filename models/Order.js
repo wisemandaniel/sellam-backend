@@ -149,6 +149,22 @@ const orderSchema = new mongoose.Schema(
       ],
       default: "pending",
     },
+    paymentStatus: {
+      type: String,
+      enum: [
+        "unpaid",
+        "paid",
+      ],
+      default: "unpaid",
+    },
+    paymentMethod: {
+      type: String,
+      enum: [
+        "cash",
+        "momo",
+      ],
+      default: "cash",
+    },
     deliveryAddress: { type: String, required: true },
     phone: { type: String, required: true },
     notes: { type: String, default: "" },
