@@ -1443,7 +1443,7 @@ const updateOrder = async (req, res) => {
     }
 
     // Allowed fields for admin update
-    const allowedUpdates = ['status', 'deliveryAddress', 'phone', 'notes', 'rider'];
+    const allowedUpdates = ['status', 'deliveryAddress', 'phone', 'notes', 'rider', 'paymentStatus', 'paymentMethod', 'distance'];
     const updates = {};
     
     Object.keys(updateData).forEach(key => {
@@ -1474,7 +1474,7 @@ const updateOrder = async (req, res) => {
     .populate('user', 'name phone email')
     .populate('rider', 'name phone')
     .populate('items.product', 'name image price')
-    .populate('items.store', 'name phone');
+    .populate('items.business', 'name phone'); // Fixed: changed 'store' to 'business'
 
     console.log(`✅ ADMIN - Order ${id} updated successfully`);
 
@@ -1484,11 +1484,16 @@ const updateOrder = async (req, res) => {
         id: updatedOrder._id,
         orderNumber: updatedOrder.orderNumber,
         status: updatedOrder.status,
+        paymentStatus: updatedOrder.paymentStatus,
+        paymentMethod: updatedOrder.paymentMethod,
         total: updatedOrder.total,
+        subtotal: updatedOrder.subtotal,
         deliveryFee: updatedOrder.deliveryFee,
+        distance: updatedOrder.distance,
         customer: {
           name: updatedOrder.user?.name || 'Customer',
-          phone: updatedOrder.user?.phone || updatedOrder.phone
+          phone: updatedOrder.user?.phone || updatedOrder.phone,
+          email: updatedOrder.user?.email
         },
         rider: updatedOrder.rider ? {
           name: updatedOrder.rider.name,
@@ -1499,7 +1504,7 @@ const updateOrder = async (req, res) => {
           image: item.product?.image || '',
           price: item.price,
           quantity: item.quantity,
-          store: item.store?.name || 'Store not found'
+          business: item.business?.name || 'Business not found' // Fixed: changed 'store' to 'business'
         })),
         deliveryAddress: updatedOrder.deliveryAddress,
         phone: updatedOrder.phone,
