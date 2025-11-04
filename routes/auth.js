@@ -12,7 +12,7 @@ const router = express.Router();
 
 // Public routes
 router.post('/login', login);
-router.post('/register', register); // Only admin can register new users
+router.post('/register', protect, authorize('admin'), register);
 
 // Protected routes
 router.get('/me', protect, getMe);

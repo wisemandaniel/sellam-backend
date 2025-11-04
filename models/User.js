@@ -118,7 +118,7 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
   }
 };
 
-// Generate JWT token - FIXED: using JWT_EXPIRE from env
+// Generate JWT token
 userSchema.methods.generateAuthToken = function () {
   const payload = {
     id: this._id,
@@ -141,7 +141,7 @@ userSchema.methods.generateAuthToken = function () {
 
 // Check if profile is complete
 userSchema.methods.checkProfileComplete = function () {
-  this.isProfileComplete = !!(this.name && this.address && this.phone);
+  this.isProfileComplete = !!(this.name && this.address && this.phone && this.profileImage);
   return this.isProfileComplete;
 };
 
