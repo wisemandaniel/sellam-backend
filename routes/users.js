@@ -15,6 +15,8 @@ const {
   deleteUser
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/auth');
+const { handleUploadError, upload } = require('../middleware/upload');
+const { uploadProfileImage, deleteProfileImage } = require('../controllers/authController');
 
 const router = express.Router();
 
@@ -36,5 +38,7 @@ router.get('/', protect, authorize('admin'), getUsers); // Get all users (admin 
 router.post('/', protect, authorize('admin'), addUser); // Create user (admin only)
 router.put('/:id', protect, authorize('admin'), updateUser); // Update user (admin only)
 router.delete('/:id', protect, authorize('admin'), deleteUser); // Delete user (admin only)
+router.put('/:userId/upload-profile-image', protect, upload.single('profileImage'), handleUploadError, uploadProfileImage);
+router.delete('/:userId/profile-image', protect, deleteProfileImage);
 
 module.exports = router;
