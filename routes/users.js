@@ -35,8 +35,11 @@ router.delete('/devices/:deviceId', protect, removeDevice); // Remove device
 
 // NEW ROUTES FOR FRONTEND ADMIN PANEL
 router.get('/', protect, authorize('admin'), getUsers); // Get all users (admin only)
-router.post('/', protect, authorize('admin'), addUser); // Create user (admin only)
-router.put('/:id', protect, authorize('admin'), updateUser); // Update user (admin only)
+
+// FIXED: Add multer middleware for file uploads
+router.post('/', protect, authorize('admin'), upload.single('profileImage'), handleUploadError, addUser); // Create user (admin only)
+router.put('/:id', protect, authorize('admin'), upload.single('profileImage'), handleUploadError, updateUser); // Update user (admin only)
+
 router.delete('/:id', protect, authorize('admin'), deleteUser); // Delete user (admin only)
 router.put('/:userId/upload-profile-image', protect, upload.single('profileImage'), handleUploadError, uploadProfileImage);
 router.delete('/:userId/profile-image', protect, deleteProfileImage);
