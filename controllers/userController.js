@@ -302,15 +302,9 @@ const addUser = async (req, res) => {
 // @access  Private/Admin
 const updateUser = async (req, res) => {
   try {
-    console.log('🖼️ UPDATE USER PHOTO - Admin request for ID:', req.params.id);
-    console.log('🖼️ UPDATE USER PHOTO - File:', req.file ? 'Present' : 'Not present');
-
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: 'No profile image provided'
-      });
-    }
+    console.log('✏️ UPDATE USER - Admin request for ID:', req.params.id);
+    console.log('✏️ UPDATE USER - Body:', req.body);
+    console.log('✏️ UPDATE USER - File:', req.file ? 'Present' : 'Not present');
 
     // Find user
     let user = await User.findById(req.params.id);
@@ -321,28 +315,137 @@ const updateUser = async (req, res) => {
       });
     }
 
-    // Handle profile photo upload
-    const profileImageUrl = await uploadToSupabase(req.file, user._id, user.profileImage);
-    
+    // Initialize update data
+    const updateData = {};
+    let hasValidUpdate = false;
+
+    // Handle regular field updates from req.body (JSON data)
+    if (req.body && Object.keys(req.body).length > 0) {
+      const { name, email, phone, role, isActive, address, vehicleType } = req.body;
+
+      // Build update object with only provided fields
+      if (name !== undefined && name !== null && name !== '') {
+        updateData.name = name.trim();
+        hasValidUpdate = true;
+      }
+
+      if (email !== undefined && email !== null && email !== '') {
+        updateData.email = email.toLowerCase().trim();
+        hasValidUpdate = true;
+      }
+
+      if (phone !== undefined && phone !== null && phone !== '') {
+        updateData.phone = phone.trim();
+        hasValidUpdate = true;
+      }
+
+      if (role !== undefined && role !== null && role !== '') {
+        updateData.role = role;
+        hasValidUpdate = true;
+      }
+
+      if (typeof isActive !== 'undefined' && isActive !== null) {
+        updateData.isActive = isActive;
+        hasValidUpdate = true;
+      }
+
+      if (address !== undefined && address !== null && address !== '') {
+        updateData.address = address;
+        hasValidUpdate = true;
+      }
+
+      if (vehicleType !== undefined && vehicleType !== null && vehicleType !== '') {
+        updateData.vehicleType = vehicleType;
+        hasValidUpdate = true;
+      }
+    }
+
+    // Handle profile photo upload if provided (optional)
+    if (req.file) {
+      try {
+        const profileImageUrl = await uploadToSupabase(req.file, user._id, user.profileImage);
+        updateData.profileImage = profileImageUrl;
+        hasValidUpdate = true;
+        console.log('✅ Profile photo updated during user update');
+      } catch (uploadError) {
+        console.error('❌ Profile photo upload failed:', uploadError.message);
+        // Continue with other updates even if photo upload fails
+      }
+    }
+
+    // Check if we have at least one valid field to update
+    if (!hasValidUpdate) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one valid field must be provided for update'
+      });
+    }
+
+    // Check for email/phone conflicts only if they are being updated
+    if (updateData.email || updateData.phone) {
+      const query = {
+        _id: { $ne: req.params.id }
+      };
+
+      const conditions = [];
+      if (updateData.email) conditions.push({ email: updateData.email });
+      if (updateData.phone) conditions.push({ phone: updateData.phone });
+
+      if (conditions.length > 0) {
+        query.$or = conditions;
+        const existingUser = await User.findOne(query);
+
+        if (existingUser) {
+          const conflictField = existingUser.email === updateData.email ? 'email' : 'phone';
+          return res.status(400).json({
+            success: false,
+            message: `${conflictField} already taken by another user`
+          });
+        }
+      }
+    }
+
+    // Update user with all changes
     user = await User.findByIdAndUpdate(
       req.params.id,
-      { profileImage: profileImageUrl },
-      { new: true }
+      updateData,
+      { new: true, runValidators: true }
     ).select('-password -verifiedDevices -pendingDeviceVerification');
 
-    console.log('✅ USER PHOTO UPDATED:', user.email || user.phone);
+    // Update account status if rider and vehicle type or active status changed
+    if (user.role === 'rider' && (updateData.vehicleType || updateData.isActive !== undefined)) {
+      await Account.findOneAndUpdate(
+        { user: user._id },
+        { 
+          status: user.isActive ? 'active' : 'inactive',
+          vehicleType: user.vehicleType 
+        }
+      );
+    }
+
+    console.log('✅ USER UPDATED:', user.email || user.phone);
+    console.log('📋 Updated fields:', Object.keys(updateData));
 
     res.json({
       success: true,
       data: user,
-      message: 'Profile photo updated successfully'
+      message: 'User updated successfully',
+      updatedFields: Object.keys(updateData)
     });
 
   } catch (error) {
-    console.error('❌ UPDATE USER PHOTO ERROR:', error);
+    console.error('❌ UPDATE USER ERROR:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email or phone already taken by another user'
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Error updating profile photo: ' + error.message
+      message: 'Error updating user: ' + error.message
     });
   }
 };
