@@ -34,7 +34,7 @@ const handleUploadError = (error, req, res, next) => {
     if (error.code === 'LIMIT_UNEXPECTED_FILE') {
       return res.status(400).json({
         success: false,
-        message: 'Unexpected field. Please use "profileImage" as the field name.'
+        message: 'Unexpected field. Please use correct field names.'
       });
     }
   } else if (error) {
