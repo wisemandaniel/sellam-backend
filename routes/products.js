@@ -1,31 +1,35 @@
 const express = require('express');
-const { protect } = require('../middleware/auth');
+const router = express.Router();
+const { upload, handleUploadError } = require('../middleware/upload'); 
 const {
-  // Frontend routes
   getAllProducts,
+  getProduct,
   addProduct,
   updateProduct,
   deleteProduct,
-  
-  // Existing mobile app routes
+  addProductImages,
+  removeProductImage,
   getProducts,
-  getProduct,
-  getVendorProducts,
-  createProduct
+  getVendorProducts
 } = require('../controllers/productController');
 
-const router = express.Router();
+const uploadMiddleware = [
+  upload.array('images', 10), // 'images' field, max 10 files
+  handleUploadError
+];
 
-// Frontend API routes (match frontend expectations)
-router.get('/', getAllProducts); // GET /api/products (for frontend)
-router.post('/', protect, addProduct); // POST /api/products (for frontend)
-router.put('/:id', protect, updateProduct); // PUT /api/products/:id (for frontend)
-router.delete('/:id', protect, deleteProduct); // DELETE /api/products/:id (for frontend)
+router.post('/', uploadMiddleware, addProduct);
+router.put('/:id', uploadMiddleware, updateProduct);
+router.put('/:id/images', uploadMiddleware, addProductImages);
 
-// Existing mobile app routes (keep for backward compatibility)
-router.get('/mobile', getProducts); // GET /api/products/mobile (with search/filter)
-router.get('/:id', getProduct); // GET /api/products/:id
-router.get('/vendor/:storeId', protect, getVendorProducts); // GET /api/products/vendor/:storeId
-router.post('/create', protect, createProduct); // POST /api/products/create (alias)
+// Routes without file uploads
+router.get('/', getAllProducts);
+router.get('/:id', getProduct);
+router.delete('/:id', deleteProduct);
+router.delete('/:id/images', removeProductImage);
+
+// Mobile app compatibility routes
+router.get('/mobile/products', getProducts);
+router.get('/mobile/vendor/:storeId/products', getVendorProducts);
 
 module.exports = router;
