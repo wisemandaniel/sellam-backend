@@ -340,12 +340,12 @@ const createOrder = async (req, res) => {
     // Populate order data
     await order.populate({
       path: "items.product",
-      select: "name image price",
+      select: "name images price featuredImage"
     });
 
     await order.populate({
       path: "items.store",
-      select: "name deliveryTime",
+      select: "name deliveryTime"
     });
 
     await order.populate({
@@ -370,7 +370,8 @@ const createOrder = async (req, res) => {
         subtotal: order.subtotal,
         items: order.items.map((item) => ({
           name: item.product.name,
-          image: item.product.image,
+          images: item.product.images || [],
+          featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
           store: item.store.name,
@@ -405,8 +406,6 @@ const createOrder = async (req, res) => {
     });
   }
 };
-
-// Add this to your orderController.js
 
 // @desc    Create order for user (admin only)
 // @route   POST /api/orders/admin/create
@@ -528,12 +527,12 @@ const createOrderForUser = async (req, res) => {
     // Populate order data
     await order.populate({
       path: "items.product",
-      select: "name image price",
+      select: "name images price featuredImage"
     });
 
     await order.populate({
       path: "items.business",
-      select: "name deliveryTime phone address", // Fixed: changed 'store' to 'business'
+      select: "name deliveryTime phone address"
     });
 
     await order.populate({
@@ -563,11 +562,12 @@ const createOrderForUser = async (req, res) => {
         },
         items: order.items.map((item) => ({
           name: item.product.name,
-          image: item.product.image,
+          images: item.product.images || [],
+          featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          business: item.business.name, // Fixed: changed 'store' to 'business'
-          deliveryTime: item.business.deliveryTime, // Fixed: changed 'store' to 'business'
+          business: item.business.name,
+          deliveryTime: item.business.deliveryTime,
         })),
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
@@ -606,7 +606,7 @@ const getMyOrders = async (req, res) => {
     const orders = await Order.find({ user: req.user._id })
       .populate({
         path: 'items.product',
-        select: 'name image price'
+        select: 'name images price featuredImage'
       })
       .populate({
         path: 'items.store',
@@ -623,7 +623,8 @@ const getMyOrders = async (req, res) => {
       subtotal: order.subtotal,
       items: order.items.map(item => ({
         name: item.product?.name || 'Product not found',
-        image: item.product?.image || '',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
         store: item.store?.name || 'Store not found',
@@ -632,7 +633,7 @@ const getMyOrders = async (req, res) => {
       deliveryAddress: order.deliveryAddress,
       phone: order.phone,
       notes: order.notes,
-      acceptedAt: order.acceptedAt, // ✅ Now included
+      acceptedAt: order.acceptedAt,
       deliveredAt: order.deliveredAt,
       createdAt: order.createdAt
     }));
@@ -656,7 +657,7 @@ const getOrder = async (req, res) => {
     const order = await Order.findById(req.params.id)
       .populate("rider", "name phone")
       .populate("user", "name phone")
-      .populate("items.product", "name image price")
+      .populate("items.product", "name images price featuredImage")
       .populate("items.store", "name address phone");
       
     if (!order) {
@@ -666,9 +667,22 @@ const getOrder = async (req, res) => {
       });
     }
     
+    // Format the response to include images
+    const formattedOrder = {
+      ...order.toObject(),
+      items: order.items.map(item => ({
+        ...item,
+        product: {
+          ...item.product,
+          images: item.product?.images || [],
+          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || '')
+        }
+      }))
+    };
+    
     res.json({ 
       success: true, 
-      data: order 
+      data: formattedOrder 
     });
   } catch (error) {
     console.error('Get order error:', error);
@@ -691,7 +705,7 @@ const getPendingOrders = async (req, res) => {
       })
       .populate({
         path: 'items.product',
-        select: 'name image price category'
+        select: 'name images price category featuredImage'
       })
       .populate({
         path: 'items.store',
@@ -715,7 +729,8 @@ const getPendingOrders = async (req, res) => {
       },
       items: order.items.map(item => ({
         name: item.product?.name || 'Product not found',
-        image: item.product?.image || '',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
         store: {
@@ -762,7 +777,7 @@ const getMyCompletedDeliveries = async (req, res) => {
       status: 'delivered'
     })
     .populate('user', 'name phone')
-    .populate('items.product', 'name image price')
+    .populate('items.product', 'name images price featuredImage')
     .populate('items.store', 'name address deliveryTime coordinates phone')
     .select('orderNumber status total deliveryFee items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ deliveredAt: -1 })
@@ -782,7 +797,8 @@ const getMyCompletedDeliveries = async (req, res) => {
       },
       items: order.items.map(item => ({
         name: item.product?.name || 'Product not found',
-        image: item.product?.image || '',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
         store: {
@@ -857,7 +873,7 @@ const acceptDelivery = async (req, res) => {
         runValidators: true
       }
     ).populate('user', 'name phone')
-     .populate('items.product', 'name image price')
+     .populate('items.product', 'name images price featuredImage')
      .populate('items.store', 'name address deliveryTime coordinates phone');
 
     if (!order) {
@@ -902,7 +918,8 @@ const acceptDelivery = async (req, res) => {
       },
       items: order.items.map(item => ({
         name: item.product?.name || 'Product not found',
-        image: item.product?.image || '',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
         store: {
@@ -1052,7 +1069,7 @@ const getMyActiveDeliveries = async (req, res) => {
       status: { $in: ['accepted', 'picked_up'] }
     })
     .populate('user', 'name phone')
-    .populate('items.product', 'name image price')
+    .populate('items.product', 'name images price featuredImage')
     .populate('items.store', 'name address deliveryTime coordinates phone')
     .select('orderNumber status total deliveryFee items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ acceptedAt: -1 })
@@ -1072,7 +1089,8 @@ const getMyActiveDeliveries = async (req, res) => {
       },
       items: order.items.map(item => ({
         name: item.product?.name || 'Product not found',
-        image: item.product?.image || '',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
         store: {
@@ -1173,7 +1191,7 @@ const updateOrderStatus = async (req, res) => {
             runValidators: true
           }
         ).populate('user', 'name phone')
-         .populate('items.product', 'name image price')
+         .populate('items.product', 'name images price featuredImage')
          .populate('items.store', 'name address phone');
 
         if (!order) {
@@ -1268,7 +1286,7 @@ const updateOrderStatus = async (req, res) => {
           runValidators: true
         }
       ).populate('user', 'name phone')
-       .populate('items.product', 'name image price')
+       .populate('items.product', 'name images price featuredImage')
        .populate('items.store', 'name address phone');
 
       if (!order) {
@@ -1342,7 +1360,6 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
-
 // ====================
 // ADMIN PANEL FUNCTIONS
 // ====================
@@ -1357,8 +1374,8 @@ const getAllOrders = async (req, res) => {
     const orders = await Order.find()
       .populate('user', 'name phone email')
       .populate('rider', 'name phone')
-      .populate('items.product', 'name image price')
-      .populate('items.business', 'name phone address deliveryTime') // Fixed: changed 'store' to 'business'
+      .populate('items.product', 'name images price featuredImage')
+      .populate('items.business', 'name phone address deliveryTime')
       .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated')
       .sort({ createdAt: -1 });
 
@@ -1383,10 +1400,11 @@ const getAllOrders = async (req, res) => {
       } : null,
       items: order.items.map(item => ({
         name: item.product?.name || 'Product not found',
-        image: item.product?.image || '',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
-        business: item.business ? { // Fixed: changed 'store' to 'business'
+        business: item.business ? {
           name: item.business.name || 'Business not found',
           phone: item.business.phone || '',
           address: item.business.address || '',
@@ -1473,8 +1491,8 @@ const updateOrder = async (req, res) => {
     )
     .populate('user', 'name phone email')
     .populate('rider', 'name phone')
-    .populate('items.product', 'name image price')
-    .populate('items.business', 'name phone'); // Fixed: changed 'store' to 'business'
+    .populate('items.product', 'name images price featuredImage')
+    .populate('items.business', 'name phone');
 
     console.log(`✅ ADMIN - Order ${id} updated successfully`);
 
@@ -1501,10 +1519,11 @@ const updateOrder = async (req, res) => {
         } : null,
         items: updatedOrder.items.map(item => ({
           name: item.product?.name || 'Product not found',
-          image: item.product?.image || '',
+          images: item.product?.images || [],
+          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          business: item.business?.name || 'Business not found' // Fixed: changed 'store' to 'business'
+          business: item.business?.name || 'Business not found'
         })),
         deliveryAddress: updatedOrder.deliveryAddress,
         phone: updatedOrder.phone,
