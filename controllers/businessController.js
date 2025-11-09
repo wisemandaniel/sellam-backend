@@ -87,12 +87,13 @@ const uploadToSupabase = async (file, businessId, imageType, oldImageUrl = null)
 // @access  Public
 const getBusinesses = async (req, res) => {
   try {
-    const { category, isOpen, search } = req.query;
+    const { category, isOpen, search, isApproved } = req.query;
     
     let filter = {};
     
     if (category) filter.category = category;
     if (isOpen !== undefined) filter.isOpen = isOpen === 'true';
+    if (isApproved !== undefined) filter.isApproved = isApproved === 'true';
     if (search) {
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -238,7 +239,8 @@ const addBusiness = async (req, res) => {
       deliveryFee: deliveryFee ? Number(deliveryFee) : 1000,
       minOrderAmount: minOrderAmount ? Number(minOrderAmount) : 0,
       openingHours: parsedOpeningHours,
-      tags: parsedTags
+      tags: parsedTags,
+      isApproved: false // New businesses are not approved by default
     };
 
     const business = await Business.create(businessData);
@@ -259,7 +261,7 @@ const addBusiness = async (req, res) => {
     res.status(201).json({
       success: true,
       data: savedBusiness,
-      message: 'Business created successfully'
+      message: 'Business created successfully. Waiting for admin approval.'
     });
 
   } catch (error) {
@@ -340,7 +342,7 @@ const updateBusiness = async (req, res) => {
       });
     }
 
-    const { name, description, address, phone, email, category, deliveryTime, deliveryFee, minOrderAmount, openingHours, isOpen, tags } = req.body;
+    const { name, description, address, phone, email, category, deliveryTime, deliveryFee, minOrderAmount, openingHours, isOpen, tags, isApproved } = req.body;
 
     // Build update data
     const updateData = {};
@@ -367,6 +369,14 @@ const updateBusiness = async (req, res) => {
     if (deliveryFee !== undefined) updateData.deliveryFee = Number(deliveryFee);
     if (minOrderAmount !== undefined) updateData.minOrderAmount = Number(minOrderAmount);
     if (typeof isOpen !== 'undefined') updateData.isOpen = isOpen;
+    
+    // Handle isApproved field - check if it's explicitly provided
+    // Only admins can update isApproved field
+    if (isApproved !== undefined && req.user.role === 'admin') {
+      updateData.isApproved = isApproved;
+      hasValidUpdate = true;
+      console.log('✅ isApproved updated to:', isApproved);
+    }
 
     if (openingHours) {
       try {

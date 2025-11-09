@@ -27,6 +27,10 @@ const productSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isAvailable: {
+    type: Boolean,
+    default: true
+  },
   discount: {
     type: Number,
     min: 0,
@@ -62,6 +66,12 @@ productSchema.pre('save', function(next) {
   if (this.images.length > 0 && !this.featuredImage) {
     this.featuredImage = this.images[0];
   }
+  
+  // Set isAvailable based on inStock if isAvailable is not explicitly set
+  if (this.isModified('inStock') && !this.isModified('isAvailable')) {
+    this.isAvailable = this.inStock;
+  }
+  
   next();
 });
 

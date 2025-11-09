@@ -257,7 +257,7 @@ const updateProduct = async (req, res) => {
       });
     }
 
-    const { name, description, price, category, discount, inStock, tags, featuredImage } = req.body;
+    const { name, description, price, category, discount, inStock, isAvailable, tags, featuredImage } = req.body;
 
     // Handle multer file format
     let uploadedFiles = [];
@@ -295,9 +295,30 @@ const updateProduct = async (req, res) => {
       hasValidUpdate = true;
     }
 
+    // Handle inStock field
     if (typeof inStock !== 'undefined' && inStock !== null) {
       updateData.inStock = inStock !== 'false';
       hasValidUpdate = true;
+      console.log('✅ inStock updated to:', updateData.inStock);
+    }
+
+    // Handle isAvailable field
+    if (typeof isAvailable !== 'undefined' && isAvailable !== null) {
+      updateData.isAvailable = isAvailable !== 'false';
+      hasValidUpdate = true;
+      console.log('✅ isAvailable updated to:', updateData.isAvailable);
+    }
+
+    // Sync isAvailable with inStock if only inStock is provided
+    if (typeof inStock !== 'undefined' && inStock !== null && typeof isAvailable === 'undefined') {
+      updateData.isAvailable = inStock !== 'false';
+      console.log('✅ isAvailable synced with inStock:', updateData.isAvailable);
+    }
+
+    // Sync inStock with isAvailable if only isAvailable is provided
+    if (typeof isAvailable !== 'undefined' && isAvailable !== null && typeof inStock === 'undefined') {
+      updateData.inStock = isAvailable !== 'false';
+      console.log('✅ inStock synced with isAvailable:', updateData.inStock);
     }
 
     if (featuredImage !== undefined && featuredImage !== null && featuredImage !== '') {
@@ -365,6 +386,10 @@ const updateProduct = async (req, res) => {
     ).populate('business', 'name logo deliveryFee deliveryTime');
 
     console.log('✅ PRODUCT UPDATED:', product.name);
+    console.log('📊 Availability Status:', {
+      inStock: product.inStock,
+      isAvailable: product.isAvailable
+    });
 
     res.json({
       success: true,
@@ -381,7 +406,6 @@ const updateProduct = async (req, res) => {
     });
   }
 };
-
 // @desc    Delete product
 // @route   DELETE /api/products/:id
 // @access  Private
