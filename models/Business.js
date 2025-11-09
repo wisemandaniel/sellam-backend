@@ -27,9 +27,9 @@ const businessSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  isActive: {
+  isApproved: {
     type: Boolean,
-    default: true
+    default: false
   },
   category: {
     type: String,
