@@ -412,7 +412,7 @@ const createOrder = async (req, res) => {
 // @access  Private/Admin
 const createOrderForUser = async (req, res) => {
   try {
-    const { items, deliveryAddress, phone, notes, userId } = req.body;
+    const { items, deliveryAddress, phone, notes, userId, type } = req.body;
 
     // Validate admin permissions
     if (req.user.role !== 'admin') {
@@ -514,6 +514,7 @@ const createOrderForUser = async (req, res) => {
       orderNumber,
       user: userId,
       items: orderItems,
+      type,
       subtotal,
       deliveryFee,
       total,
@@ -553,6 +554,7 @@ const createOrderForUser = async (req, res) => {
         orderNumber: order.orderNumber,
         status: order.status,
         total: order.total,
+        type: order.type,
         deliveryFee: order.deliveryFee,
         subtotal: order.subtotal,
         customer: {
