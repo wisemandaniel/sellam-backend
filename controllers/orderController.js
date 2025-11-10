@@ -1,6 +1,6 @@
 /**
  * controllers/orderController.js
- * Full delivery/order logic with all route handlers including errands, tickets, random delivery.
+ * Full delivery/order logic with all route handlers.
  */
 
 const Order = require("../models/Order");
@@ -123,7 +123,7 @@ const validateRandomDelivery = (deliveryData) => {
   };
 };
 
-// Validate business order (existing product-based order)
+// Validate business order (FIXED - business is in product schema)
 const validateBusinessOrder = async (items) => {
   if (!items || items.length === 0) {
     throw new Error("No items in order");
@@ -131,11 +131,12 @@ const validateBusinessOrder = async (items) => {
 
   let subtotal = 0;
   const orderItems = [];
-  const storeDeliveryFees = new Map();
-  const storeIds = new Set();
+  const businessDeliveryFees = new Map();
+  const businessIds = new Set();
 
   for (const item of items) {
-    const product = await Product.findById(item.product).populate("store");
+    // FIX: Populate business from product
+    const product = await Product.findById(item.product).populate("business");
 
     if (!product) {
       throw new Error(`Product not found: ${item.product}`);
@@ -145,6 +146,11 @@ const validateBusinessOrder = async (items) => {
       throw new Error(`${product.name} is out of stock`);
     }
 
+    // FIX: Check if product has a business associated
+    if (!product.business) {
+      throw new Error(`Product ${product.name} is not associated with any business`);
+    }
+
     const price = product.discount > 0
       ? product.price * (1 - product.discount / 100)
       : product.price;
@@ -152,26 +158,28 @@ const validateBusinessOrder = async (items) => {
     const itemTotal = price * item.quantity;
     subtotal += itemTotal;
 
-    const storeId = product.store._id.toString();
-    storeIds.add(storeId);
+    // FIX: Use business from product
+    const businessId = product.business._id.toString();
+    businessIds.add(businessId);
 
-    if (!storeDeliveryFees.has(storeId)) {
-      storeDeliveryFees.set(storeId, product.store.deliveryFee);
+    if (!businessDeliveryFees.has(businessId)) {
+      businessDeliveryFees.set(businessId, product.business.deliveryFee || 1000);
     }
 
     orderItems.push({
       product: product._id,
-      store: product.store._id,
+      // FIX: Store business reference in order item
+      business: product.business._id,
       quantity: item.quantity,
       price: price,
     });
   }
 
   // Calculate delivery fee
-  const totalStoreDeliveryFees = Array.from(
-    storeDeliveryFees.values()
+  const totalBusinessDeliveryFees = Array.from(
+    businessDeliveryFees.values()
   ).reduce((sum, fee) => sum + fee, 0);
-  const deliveryFee = Math.round(totalStoreDeliveryFees);
+  const deliveryFee = Math.round(totalBusinessDeliveryFees);
   const total = subtotal + deliveryFee;
 
   return {
@@ -179,7 +187,7 @@ const validateBusinessOrder = async (items) => {
     subtotal,
     deliveryFee,
     total,
-    storeIds: Array.from(storeIds)
+    businessIds: Array.from(businessIds)
   };
 };
 
@@ -188,7 +196,7 @@ const validateBusinessOrder = async (items) => {
 // ================================
 
 // Template 1: Order Notification (5 variables - PRIVACY COMPLIANT)
-const sendWhatsAppTemplate = async (order, storeIds) => {
+const sendWhatsAppTemplate = async (order, businessIds) => {
   if (!twilioClient || !process.env.WHATSAPP_TEMPLATE_SID) {
     console.log("⚠️ WhatsApp templates not configured");
     return { success: false, message: "WhatsApp templates not configured" };
@@ -197,36 +205,36 @@ const sendWhatsAppTemplate = async (order, storeIds) => {
   try {
     console.log("📱 Sending WhatsApp template notifications...");
 
-    const stores = await Store.find({ _id: { $in: storeIds } }).select(
+    const businesses = await Store.find({ _id: { $in: businessIds } }).select(
       "name phone whatsappNumber"
     );
     let sentCount = 0;
 
-    for (const store of stores) {
-      const storePhone = store.whatsappNumber || store.phone;
-      if (!storePhone) {
-        console.log(`❌ No phone number for ${store.name}`);
+    for (const business of businesses) {
+      const businessPhone = business.whatsappNumber || business.phone;
+      if (!businessPhone) {
+        console.log(`❌ No phone number for ${business.name}`);
         continue;
       }
 
-      const storeItems = order.items.filter(
+      const businessItems = order.items.filter(
         (item) =>
-          item.store &&
-          item.store._id &&
-          item.store._id.toString() === store._id.toString()
+          item.business &&
+          item.business._id &&
+          item.business._id.toString() === business._id.toString()
       );
 
-      if (storeItems.length === 0) {
-        console.log(`❌ No items for ${store.name}`);
+      if (businessItems.length === 0) {
+        console.log(`❌ No items for ${business.name}`);
         continue;
       }
 
       // Format items list
-      const itemsList = storeItems
+      const itemsList = businessItems
         .map((item) => `${item.quantity}x ${item.product.name}`)
         .join(", ");
 
-      const storeSubtotal = storeItems.reduce(
+      const businessSubtotal = businessItems.reduce(
         (sum, item) => sum + item.price * item.quantity,
         0
       );
@@ -236,12 +244,12 @@ const sendWhatsAppTemplate = async (order, storeIds) => {
         1: order.orderNumber, // Order number
         2: order.user?.name || "Customer", // Customer name (no phone)
         3: itemsList, // Items list
-        4: formatPrice(storeSubtotal), // Total amount
+        4: formatPrice(businessSubtotal), // Total amount
         5: order.deliveryAddress, // Delivery address
       };
 
       try {
-        let formattedPhone = storePhone.replace(/\D/g, "");
+        let formattedPhone = businessPhone.replace(/\D/g, "");
         if (!formattedPhone.startsWith("237") && formattedPhone.length === 9) {
           formattedPhone = "237" + formattedPhone;
         }
@@ -253,12 +261,12 @@ const sendWhatsAppTemplate = async (order, storeIds) => {
           contentVariables: JSON.stringify(contentVariables),
         });
 
-        console.log(`✅ Template sent to ${store.name}`);
-        console.log(`   📞 ${storePhone} | Status: ${result.status}`);
+        console.log(`✅ Template sent to ${business.name}`);
+        console.log(`   📞 ${businessPhone} | Status: ${result.status}`);
         sentCount++;
       } catch (twilioError) {
         console.error(
-          `❌ Failed to send template to ${store.name}:`,
+          `❌ Failed to send template to ${business.name}:`,
           twilioError.message
         );
 
@@ -271,8 +279,8 @@ const sendWhatsAppTemplate = async (order, storeIds) => {
     return {
       success: sentCount > 0,
       sentCount,
-      totalStores: stores.length,
-      message: `WhatsApp templates sent to ${sentCount}/${stores.length} stores`,
+      totalBusinesses: businesses.length,
+      message: `WhatsApp templates sent to ${sentCount}/${businesses.length} businesses`,
     };
   } catch (error) {
     console.error("🚨 WhatsApp template error:", error);
@@ -281,38 +289,38 @@ const sendWhatsAppTemplate = async (order, storeIds) => {
 };
 
 // WhatsApp URL fallback (when templates fail)
-const generateWhatsAppURLs = async (order, storeIds) => {
+const generateWhatsAppURLs = async (order, businessIds) => {
   console.log("\n🔗 ========== WHATSAPP URL NOTIFICATIONS ==========");
   console.log("📱 PRIVACY: Customer phone numbers excluded");
   console.log("💡 INSTRUCTIONS: Click URLs to send manually");
   console.log("====================================================\n");
 
-  const stores = await Store.find({ _id: { $in: storeIds } }).select(
+  const businesses = await Store.find({ _id: { $in: businessIds } }).select(
     "name phone whatsappNumber"
   );
   let urlCount = 0;
 
-  stores.forEach((store, index) => {
-    const storePhone = store.whatsappNumber || store.phone;
-    if (!storePhone) {
-      console.log(`❌ ${index + 1}. ${store.name}: No phone number`);
+  businesses.forEach((business, index) => {
+    const businessPhone = business.whatsappNumber || business.phone;
+    if (!businessPhone) {
+      console.log(`❌ ${index + 1}. ${business.name}: No phone number`);
       return;
     }
 
-    const storeItems = order.items.filter(
+    const businessItems = order.items.filter(
       (item) =>
-        item.store &&
-        item.store._id &&
-        item.store._id.toString() === store._id.toString()
+        item.business &&
+        item.business._id &&
+        item.business._id.toString() === business._id.toString()
     );
 
-    if (storeItems.length === 0) {
-      console.log(`❌ ${index + 1}. ${store.name}: No items`);
+    if (businessItems.length === 0) {
+      console.log(`❌ ${index + 1}. ${business.name}: No items`);
       return;
     }
 
     // Format items with prices
-    const itemsList = storeItems
+    const itemsList = businessItems
       .map(
         (item) =>
           `${item.quantity}x ${item.product.name} - ${formatPrice(
@@ -321,7 +329,7 @@ const generateWhatsAppURLs = async (order, storeIds) => {
       )
       .join("%0A");
 
-    const storeSubtotal = storeItems.reduce(
+    const businessSubtotal = businessItems.reduce(
       (sum, item) => sum + item.price * item.quantity,
       0
     );
@@ -332,21 +340,21 @@ const generateWhatsAppURLs = async (order, storeIds) => {
       `Order Number: ${order.orderNumber}%0A` +
       `Customer Name: ${order.user?.name || "Customer"}%0A%0A` +
       `YOUR ITEMS:%0A${itemsList}%0A%0A` +
-      `Store Subtotal: ${formatPrice(storeSubtotal)}%0A%0A` +
+      `Business Subtotal: ${formatPrice(businessSubtotal)}%0A%0A` +
       `Delivery Address: ${order.deliveryAddress}%0A%0A` +
       `Order Notes: ${order.notes || "No special instructions"}%0A%0A` +
       `Please confirm receipt and preparation time.`;
 
-    const formattedPhone = storePhone.replace(/\D/g, "");
+    const formattedPhone = businessPhone.replace(/\D/g, "");
     const whatsappUrl = `https://wa.me/${formattedPhone}?text=${message}`;
 
-    console.log(`✅ ${index + 1}. ${store.name}`);
-    console.log(`   📞 Store: ${storePhone}`);
+    console.log(`✅ ${index + 1}. ${business.name}`);
+    console.log(`   📞 Business: ${businessPhone}`);
     console.log(
       `   👤 Customer: ${order.user?.name || "Customer"} (phone protected)`
     );
     console.log(
-      `   📦 ${storeItems.length} item(s) - ${formatPrice(storeSubtotal)}`
+      `   📦 ${businessItems.length} item(s) - ${formatPrice(businessSubtotal)}`
     );
     console.log(`   🔗 ${whatsappUrl}`);
     console.log("");
@@ -363,15 +371,15 @@ const generateWhatsAppURLs = async (order, storeIds) => {
 };
 
 // Hybrid notification system (templates + fallback)
-const sendStoreNotifications = async (order, storeIds) => {
-  console.log("\n🎯 ========== STORE NOTIFICATIONS ==========");
+const sendStoreNotifications = async (order, businessIds) => {
+  console.log("\n🎯 ========== BUSINESS NOTIFICATIONS ==========");
 
   // Try templates first
-  const templateResult = await sendWhatsAppTemplate(order, storeIds);
+  const templateResult = await sendWhatsAppTemplate(order, businessIds);
 
   if (!templateResult.success || templateResult.sentCount === 0) {
     console.log("🔄 Falling back to WhatsApp URLs...");
-    const urlCount = await generateWhatsAppURLs(order, storeIds);
+    const urlCount = await generateWhatsAppURLs(order, businessIds);
     return {
       method: "urls",
       count: urlCount,
@@ -395,10 +403,10 @@ const sendOrderNotifications = async (order) => {
 
     switch (order.type) {
       case 'business':
-        // Notify stores about their products
-        const storeIds = [...new Set(order.items.map(item => item.store?.toString()).filter(Boolean))];
-        if (storeIds.length > 0) {
-          notificationResult = await sendStoreNotifications(order, storeIds);
+        // Notify businesses about their products
+        const businessIds = [...new Set(order.items.map(item => item.business?.toString()).filter(Boolean))];
+        if (businessIds.length > 0) {
+          notificationResult = await sendStoreNotifications(order, businessIds);
         }
         break;
 
@@ -516,7 +524,7 @@ const createOrder = async (req, res) => {
       notes: notes || "",
     };
 
-    let storeIds = [];
+    let businessIds = [];
     let calculatedTotal = 0;
     let calculatedSubtotal = 0;
     let calculatedDeliveryFee = 0;
@@ -529,7 +537,7 @@ const createOrder = async (req, res) => {
         orderData.subtotal = businessResult.subtotal;
         orderData.deliveryFee = businessResult.deliveryFee;
         orderData.total = businessResult.total;
-        storeIds = businessResult.storeIds;
+        businessIds = businessResult.businessIds;
         break;
 
       case 'errand':
@@ -596,14 +604,14 @@ const createOrder = async (req, res) => {
     await createdOrder.populate('user', 'name phone');
     
     if (type === 'business') {
+      // FIX: Populate product and then business from product
       await createdOrder.populate({
         path: "items.product",
-        select: "name images price featuredImage"
-      });
-
-      await createdOrder.populate({
-        path: "items.store",
-        select: "name deliveryTime"
+        select: "name images price featuredImage business",
+        populate: {
+          path: "business",
+          select: "name deliveryTime phone address"
+        }
       });
     }
 
@@ -635,8 +643,9 @@ const createOrder = async (req, res) => {
           featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          store: item.store.name,
-          deliveryTime: item.store.deliveryTime,
+          // FIX: Get business from product.business
+          business: item.product.business?.name || 'Business not found',
+          deliveryTime: item.product.business?.deliveryTime || 'N/A',
         }));
         break;
 
@@ -688,7 +697,7 @@ const createOrder = async (req, res) => {
   }
 };
 
-// @desc    Create order for user (admin only) - UPDATED FOR ALL TYPES
+// @desc    Create order for user (admin only)
 // @route   POST /api/orders/admin/create
 // @access  Private/Admin
 const createOrderForUser = async (req, res) => {
@@ -765,7 +774,7 @@ const createOrderForUser = async (req, res) => {
       isAdminCreated: true
     };
 
-    let storeIds = [];
+    let businessIds = [];
     let calculatedTotal = 0;
     let calculatedSubtotal = 0;
     let calculatedDeliveryFee = 0;
@@ -786,7 +795,7 @@ const createOrderForUser = async (req, res) => {
         orderData.subtotal = businessResult.subtotal;
         orderData.deliveryFee = businessResult.deliveryFee;
         orderData.total = businessResult.total;
-        storeIds = businessResult.storeIds;
+        businessIds = businessResult.businessIds;
         break;
 
       case 'errand':
@@ -850,14 +859,14 @@ const createOrderForUser = async (req, res) => {
     await createdOrder.populate('user', 'name phone email');
     
     if (type === 'business') {
+      // FIX: Populate product and then business from product
       await createdOrder.populate({
         path: "items.product",
-        select: "name images price featuredImage"
-      });
-
-      await createdOrder.populate({
-        path: "items.store",
-        select: "name deliveryTime phone address"
+        select: "name images price featuredImage business",
+        populate: {
+          path: "business",
+          select: "name deliveryTime phone address"
+        }
       });
     }
 
@@ -895,8 +904,9 @@ const createOrderForUser = async (req, res) => {
           featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          store: item.store.name,
-          deliveryTime: item.store.deliveryTime,
+          // FIX: Get business from product.business
+          business: item.product.business?.name || 'Business not found',
+          deliveryTime: item.product.business?.deliveryTime || 'N/A',
         }));
         break;
 
@@ -948,21 +958,17 @@ const createOrderForUser = async (req, res) => {
   }
 };
 
-// ================================
-// ORDER RETRIEVAL - ALL TYPES
-// ================================
-
-// Get user orders (all types)
+// Get user orders
 const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id })
       .populate({
         path: 'items.product',
-        select: 'name images price featuredImage'
-      })
-      .populate({
-        path: 'items.store',
-        select: 'name deliveryTime'
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name deliveryTime'
+        }
       })
       .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt')
       .sort({ createdAt: -1 });
@@ -992,8 +998,9 @@ const getMyOrders = async (req, res) => {
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
             price: item.price,
             quantity: item.quantity,
-            store: item.store?.name || 'Store not found',
-            deliveryTime: item.store?.deliveryTime || 'N/A'
+            // FIX: Get business from product.business
+            business: item.product?.business?.name || 'Business not found',
+            deliveryTime: item.product?.business?.deliveryTime || 'N/A'
           }));
           break;
 
@@ -1026,14 +1033,20 @@ const getMyOrders = async (req, res) => {
   }
 };
 
-// Get single order with all type data
+// Get single order
 const getOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
       .populate("rider", "name phone")
       .populate("user", "name phone")
-      .populate("items.product", "name images price featuredImage")
-      .populate("items.store", "name address phone");
+      .populate({
+        path: "items.product",
+        select: "name images price featuredImage business",
+        populate: {
+          path: "business",
+          select: "name address phone"
+        }
+      });
       
     if (!order) {
       return res.status(404).json({ 
@@ -1050,7 +1063,8 @@ const getOrder = async (req, res) => {
         product: {
           ...item.product,
           images: item.product?.images || [],
-          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || '')
+          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+          business: item.product?.business || null
         }
       })) : undefined
     };
@@ -1068,10 +1082,6 @@ const getOrder = async (req, res) => {
   }
 };
 
-// ================================
-// EXISTING FUNCTIONS (UNCHANGED)
-// ================================
-
 // Get all pending orders (for riders/drivers)
 const getPendingOrders = async (req, res) => {
   try {
@@ -1084,11 +1094,11 @@ const getPendingOrders = async (req, res) => {
       })
       .populate({
         path: 'items.product',
-        select: 'name images price category featuredImage'
-      })
-      .populate({
-        path: 'items.store',
-        select: 'name phone address deliveryTime coordinates'
+        select: 'name images price category featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name phone address deliveryTime coordinates'
+        }
       })
       .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt updatedAt')
       .sort({ createdAt: -1 });
@@ -1124,12 +1134,12 @@ const getPendingOrders = async (req, res) => {
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
             price: item.price,
             quantity: item.quantity,
-            store: {
-              name: item.store?.name || 'Store not found',
-              phone: item.store?.phone || '',
-              address: item.store?.address || '',
-              deliveryTime: item.store?.deliveryTime || 'N/A',
-              coordinates: item.store?.coordinates || null
+            business: {
+              name: item.product?.business?.name || 'Business not found',
+              phone: item.product?.business?.phone || '',
+              address: item.product?.business?.address || '',
+              deliveryTime: item.product?.business?.deliveryTime || 'N/A',
+              coordinates: item.product?.business?.coordinates || null
             }
           }));
           break;
@@ -1179,8 +1189,14 @@ const getMyCompletedDeliveries = async (req, res) => {
       status: 'delivered'
     })
     .populate('user', 'name phone')
-    .populate('items.product', 'name images price featuredImage')
-    .populate('items.store', 'name address deliveryTime coordinates phone')
+    .populate({
+      path: 'items.product',
+      select: 'name images price featuredImage business',
+      populate: {
+        path: 'business',
+        select: 'name address deliveryTime coordinates phone'
+      }
+    })
     .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ deliveredAt: -1 })
     .lean();
@@ -1217,12 +1233,12 @@ const getMyCompletedDeliveries = async (req, res) => {
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
             price: item.price,
             quantity: item.quantity,
-            store: {
-              name: item.store?.name || 'Store not found',
-              phone: item.store?.phone || '',
-              address: item.store?.address || '',
-              deliveryTime: item.store?.deliveryTime || 'N/A',
-              coordinates: item.store?.coordinates || null
+            business: {
+              name: item.product?.business?.name || 'Business not found',
+              phone: item.product?.business?.phone || '',
+              address: item.product?.business?.address || '',
+              deliveryTime: item.product?.business?.deliveryTime || 'N/A',
+              coordinates: item.product?.business?.coordinates || null
             }
           }));
           break;
@@ -1298,8 +1314,14 @@ const acceptDelivery = async (req, res) => {
         runValidators: true
       }
     ).populate('user', 'name phone')
-     .populate('items.product', 'name images price featuredImage')
-     .populate('items.store', 'name address deliveryTime coordinates phone');
+     .populate({
+        path: 'items.product',
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name address deliveryTime coordinates phone'
+        }
+      });
 
     if (!order) {
       await session.abortTransaction();
@@ -1356,12 +1378,12 @@ const acceptDelivery = async (req, res) => {
           featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          store: {
-            name: item.store?.name || 'Store not found',
-            address: item.store?.address || '',
-            phone: item.store?.phone || '',
-            deliveryTime: item.store?.deliveryTime || 'N/A',
-            coordinates: item.store?.coordinates || null
+          business: {
+            name: item.product?.business?.name || 'Business not found',
+            address: item.product?.business?.address || '',
+            phone: item.product?.business?.phone || '',
+            deliveryTime: item.product?.business?.deliveryTime || 'N/A',
+            coordinates: item.product?.business?.coordinates || null
           }
         }));
         break;
@@ -1514,8 +1536,14 @@ const getMyActiveDeliveries = async (req, res) => {
       status: { $in: ['accepted', 'picked_up'] }
     })
     .populate('user', 'name phone')
-    .populate('items.product', 'name images price featuredImage')
-    .populate('items.store', 'name address deliveryTime coordinates phone')
+    .populate({
+      path: 'items.product',
+      select: 'name images price featuredImage business',
+      populate: {
+        path: 'business',
+        select: 'name address deliveryTime coordinates phone'
+      }
+    })
     .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ acceptedAt: -1 })
     .lean();
@@ -1552,12 +1580,12 @@ const getMyActiveDeliveries = async (req, res) => {
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
             price: item.price,
             quantity: item.quantity,
-            store: {
-              name: item.store?.name || 'Store not found',
-              phone: item.store?.phone || '',
-              address: item.store?.address || '',
-              deliveryTime: item.store?.deliveryTime || 'N/A',
-              coordinates: item.store?.coordinates || null
+            business: {
+              name: item.product?.business?.name || 'Business not found',
+              phone: item.product?.business?.phone || '',
+              address: item.product?.business?.address || '',
+              deliveryTime: item.product?.business?.deliveryTime || 'N/A',
+              coordinates: item.product?.business?.coordinates || null
             }
           }));
           break;
@@ -1659,8 +1687,14 @@ const updateOrderStatus = async (req, res) => {
             runValidators: true
           }
         ).populate('user', 'name phone')
-         .populate('items.product', 'name images price featuredImage')
-         .populate('items.store', 'name address phone');
+         .populate({
+            path: 'items.product',
+            select: 'name images price featuredImage business',
+            populate: {
+              path: 'business',
+              select: 'name address phone'
+            }
+          });
 
         if (!order) {
           throw new Error('Order not found or unauthorized for status update');
@@ -1755,8 +1789,14 @@ const updateOrderStatus = async (req, res) => {
           runValidators: true
         }
       ).populate('user', 'name phone')
-       .populate('items.product', 'name images price featuredImage')
-       .populate('items.store', 'name address phone');
+       .populate({
+          path: 'items.product',
+          select: 'name images price featuredImage business',
+          populate: {
+            path: 'business',
+            select: 'name address phone'
+          }
+        });
 
       if (!order) {
         return res.status(404).json({
@@ -1844,8 +1884,14 @@ const getAllOrders = async (req, res) => {
     const orders = await Order.find()
       .populate('user', 'name phone email')
       .populate('rider', 'name phone')
-      .populate('items.product', 'name images price featuredImage')
-      .populate('items.store', 'name phone address deliveryTime')
+      .populate({
+        path: 'items.product',
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name phone address deliveryTime'
+        }
+      })
       .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated')
       .sort({ createdAt: -1 });
 
@@ -1892,11 +1938,11 @@ const getAllOrders = async (req, res) => {
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
             price: item.price,
             quantity: item.quantity,
-            store: item.store ? {
-              name: item.store.name || 'Store not found',
-              phone: item.store.phone || '',
-              address: item.store.address || '',
-              deliveryTime: item.store.deliveryTime || 'N/A'
+            business: item.product?.business ? {
+              name: item.product.business.name || 'Business not found',
+              phone: item.product.business.phone || '',
+              address: item.product.business.address || '',
+              deliveryTime: item.product.business.deliveryTime || 'N/A'
             } : null
           }));
           break;
@@ -1984,8 +2030,14 @@ const updateOrder = async (req, res) => {
     )
     .populate('user', 'name phone email')
     .populate('rider', 'name phone')
-    .populate('items.product', 'name images price featuredImage')
-    .populate('items.store', 'name phone');
+    .populate({
+      path: 'items.product',
+      select: 'name images price featuredImage business',
+      populate: {
+        path: 'business',
+        select: 'name phone'
+      }
+    });
 
     console.log(`✅ ADMIN - Order ${id} updated successfully`);
 
@@ -2027,7 +2079,7 @@ const updateOrder = async (req, res) => {
         featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
         price: item.price,
         quantity: item.quantity,
-        store: item.store?.name || 'Store not found'
+        business: item.product?.business?.name || 'Business not found'
       }));
     } else if (updatedOrder.type === 'errand') {
       responseData.errandItems = updatedOrder.errandItems;
