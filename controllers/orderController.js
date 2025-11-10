@@ -1,6 +1,6 @@
 /**
  * controllers/orderController.js
- * Full delivery/order logic with all route handlers.
+ * Full delivery/order logic with all route handlers including errands, tickets, random delivery.
  */
 
 const Order = require("../models/Order");
@@ -32,6 +32,155 @@ const generateOrderNumber = async () => {
 // Helper function to format price
 const formatPrice = (price) => {
   return `XAF ${Math.round(price).toLocaleString()}`;
+};
+
+// ================================
+// ORDER TYPE VALIDATION FUNCTIONS
+// ================================
+
+// Validate errand items
+const validateErrandItems = (items) => {
+  if (!items || items.length === 0) {
+    throw new Error("Errand must have at least one item");
+  }
+
+  return items.map((item, index) => {
+    if (!item.name || !item.price) {
+      throw new Error(`Item ${index + 1}: name and price are required`);
+    }
+    if (typeof item.price !== 'number' || item.price < 0) {
+      throw new Error(`Item ${index + 1}: price must be a positive number`);
+    }
+    if (!item.quantity || item.quantity < 1) {
+      throw new Error(`Item ${index + 1}: quantity must be at least 1`);
+    }
+    return {
+      name: item.name,
+      price: item.price,
+      quantity: item.quantity || 1,
+      description: item.description || ''
+    };
+  });
+};
+
+// Validate ticket booking
+const validateTicketBooking = (ticketData) => {
+  const { busAgency, seatNumber, idCard, departureTime, destination } = ticketData;
+  
+  if (!busAgency) {
+    throw new Error("Bus agency is required for ticket booking");
+  }
+  if (!seatNumber) {
+    throw new Error("Seat number is required for ticket booking");
+  }
+  if (!idCard) {
+    throw new Error("ID card is required for ticket booking");
+  }
+  if (!departureTime) {
+    throw new Error("Departure time is required for ticket booking");
+  }
+  if (!destination) {
+    throw new Error("Destination is required for ticket booking");
+  }
+
+  return {
+    busAgency,
+    seatNumber,
+    idCard,
+    departureTime: new Date(departureTime),
+    destination,
+    price: ticketData.price || 0
+  };
+};
+
+// Validate random delivery
+const validateRandomDelivery = (deliveryData) => {
+  const { pickupAddress, deliveryAddress, senderNumber, receiverNumber, itemDescription } = deliveryData;
+  
+  if (!pickupAddress) {
+    throw new Error("Pickup address is required for random delivery");
+  }
+  if (!deliveryAddress) {
+    throw new Error("Delivery address is required for random delivery");
+  }
+  if (!senderNumber) {
+    throw new Error("Sender number is required for random delivery");
+  }
+  if (!receiverNumber) {
+    throw new Error("Receiver number is required for random delivery");
+  }
+  if (!itemDescription) {
+    throw new Error("Item description is required for random delivery");
+  }
+
+  return {
+    pickupAddress,
+    deliveryAddress,
+    senderNumber,
+    receiverNumber,
+    itemDescription,
+    price: deliveryData.price || 0
+  };
+};
+
+// Validate business order (existing product-based order)
+const validateBusinessOrder = async (items) => {
+  if (!items || items.length === 0) {
+    throw new Error("No items in order");
+  }
+
+  let subtotal = 0;
+  const orderItems = [];
+  const storeDeliveryFees = new Map();
+  const storeIds = new Set();
+
+  for (const item of items) {
+    const product = await Product.findById(item.product).populate("store");
+
+    if (!product) {
+      throw new Error(`Product not found: ${item.product}`);
+    }
+
+    if (!product.inStock) {
+      throw new Error(`${product.name} is out of stock`);
+    }
+
+    const price = product.discount > 0
+      ? product.price * (1 - product.discount / 100)
+      : product.price;
+
+    const itemTotal = price * item.quantity;
+    subtotal += itemTotal;
+
+    const storeId = product.store._id.toString();
+    storeIds.add(storeId);
+
+    if (!storeDeliveryFees.has(storeId)) {
+      storeDeliveryFees.set(storeId, product.store.deliveryFee);
+    }
+
+    orderItems.push({
+      product: product._id,
+      store: product.store._id,
+      quantity: item.quantity,
+      price: price,
+    });
+  }
+
+  // Calculate delivery fee
+  const totalStoreDeliveryFees = Array.from(
+    storeDeliveryFees.values()
+  ).reduce((sum, fee) => sum + fee, 0);
+  const deliveryFee = Math.round(totalStoreDeliveryFees);
+  const total = subtotal + deliveryFee;
+
+  return {
+    orderItems,
+    subtotal,
+    deliveryFee,
+    total,
+    storeIds: Array.from(storeIds)
+  };
 };
 
 // ================================
@@ -237,16 +386,105 @@ const sendStoreNotifications = async (order, storeIds) => {
   };
 };
 
+// Send order notifications based on type
+const sendOrderNotifications = async (order) => {
+  try {
+    console.log(`📱 Sending notifications for ${order.type} order ${order.orderNumber}`);
+
+    let notificationResult = { method: 'none', count: 0, message: 'No notifications sent' };
+
+    switch (order.type) {
+      case 'business':
+        // Notify stores about their products
+        const storeIds = [...new Set(order.items.map(item => item.store?.toString()).filter(Boolean))];
+        if (storeIds.length > 0) {
+          notificationResult = await sendStoreNotifications(order, storeIds);
+        }
+        break;
+
+      case 'errand':
+        // For errands, notify admin about new errand request
+        const errandMessage = `
+NEW ERRAND REQUEST
+Order: ${order.orderNumber}
+Customer: ${order.user?.name || 'Customer'}
+Items: ${order.errandItems.map(item => `${item.quantity}x ${item.name} - ${formatPrice(item.price)}`).join(', ')}
+Total: ${formatPrice(order.total)}
+Delivery: ${order.deliveryAddress}
+Phone: ${order.phone}
+        `.trim();
+        console.log('📋 Errand Details:', errandMessage);
+        notificationResult = { method: 'errand', count: 1, message: 'Errand notifications sent to admin' };
+        break;
+
+      case 'ticket':
+        // For tickets, notify ticket agencies or admin
+        const ticketMessage = `
+NEW TICKET BOOKING
+Order: ${order.orderNumber}
+Agency: ${order.ticketData.busAgency}
+Destination: ${order.ticketData.destination}
+Seat: ${order.ticketData.seatNumber}
+Departure: ${order.ticketData.departureTime}
+Customer: ${order.user?.name || 'Customer'}
+ID: ${order.ticketData.idCard}
+Phone: ${order.phone}
+        `.trim();
+        console.log('🎟️ Ticket Details:', ticketMessage);
+        notificationResult = { method: 'ticket', count: 1, message: 'Ticket notifications sent to agency' };
+        break;
+
+      case 'random':
+        // For random delivery, notify available delivery riders
+        const deliveryMessage = `
+NEW RANDOM DELIVERY
+Order: ${order.orderNumber}
+Item: ${order.deliveryData.itemDescription}
+Pickup: ${order.deliveryData.pickupAddress}
+Delivery: ${order.deliveryData.deliveryAddress}
+Sender: ${order.deliveryData.senderNumber}
+Receiver: ${order.deliveryData.receiverNumber}
+Customer: ${order.user?.name || 'Customer'}
+Phone: ${order.phone}
+        `.trim();
+        console.log('🚚 Delivery Details:', deliveryMessage);
+        notificationResult = { method: 'random', count: 1, message: 'Delivery notifications sent to riders' };
+        break;
+    }
+
+    return notificationResult;
+  } catch (error) {
+    console.error('❌ Notification error:', error);
+    return { method: 'error', count: 0, message: error.message };
+  }
+};
+
 // ================================
-// ORDER STATUS MANAGEMENT - FIXED VERSIONS
+// ORDER CREATION - ALL TYPES
 // ================================
 
-// Create new order
+// Create new order (supports all types)
 const createOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { items, deliveryAddress, phone, notes } = req.body;
+    const { 
+      type = 'business', // Default to business for backward compatibility
+      items, 
+      deliveryAddress, 
+      phone, 
+      notes,
+      // Errand specific
+      errandItems,
+      // Ticket specific
+      busAgency, seatNumber, idCard, departureTime, destination, ticketPrice,
+      // Random delivery specific
+      pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
+    } = req.body;
 
     if (!req.user) {
+      await session.abortTransaction();
       return res.status(401).json({
         success: false,
         message: "User not authenticated",
@@ -254,121 +492,144 @@ const createOrder = async (req, res) => {
     }
 
     // Validate required fields
-    if (!items || items.length === 0) {
+    if (!['business', 'errand', 'ticket', 'random'].includes(type)) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: "No items in order",
+        message: "Valid order type is required (business, errand, ticket, random)"
       });
     }
 
     if (!deliveryAddress || !phone) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: "Delivery address and phone are required",
       });
     }
 
-    // Process items and calculate totals
-    let subtotal = 0;
-    const orderItems = [];
-    const storeDeliveryFees = new Map();
-    const storeIds = new Set();
-
-    for (const item of items) {
-      const product = await Product.findById(item.product).populate("store");
-
-      if (!product) {
-        return res.status(404).json({
-          success: false,
-          message: `Product not found: ${item.product}`,
-        });
-      }
-
-      if (!product.inStock) {
-        return res.status(400).json({
-          success: false,
-          message: `${product.name} is out of stock`,
-        });
-      }
-
-      const price =
-        product.discount > 0
-          ? product.price * (1 - product.discount / 100)
-          : product.price;
-
-      const itemTotal = price * item.quantity;
-      subtotal += itemTotal;
-
-      const storeId = product.store._id.toString();
-      storeIds.add(storeId);
-
-      if (!storeDeliveryFees.has(storeId)) {
-        storeDeliveryFees.set(storeId, product.store.deliveryFee);
-      }
-
-      orderItems.push({
-        product: product._id,
-        store: product.store._id,
-        quantity: item.quantity,
-        price: price,
-      });
-    }
-
-    // Calculate delivery fee (75% of sum of store fees)
-    const totalStoreDeliveryFees = Array.from(
-      storeDeliveryFees.values()
-    ).reduce((sum, fee) => sum + fee, 0);
-    const deliveryFee = Math.round(totalStoreDeliveryFees);
-    const total = subtotal + deliveryFee;
-
-    // Generate order number
-    const orderNumber = await generateOrderNumber();
-
-    // Create order
-    const order = await Order.create({
-      orderNumber,
+    let orderData = {
       user: req.user._id,
-      items: orderItems,
-      subtotal,
-      deliveryFee,
-      total,
+      type,
       deliveryAddress,
       phone,
       notes: notes || "",
-    });
+    };
+
+    let storeIds = [];
+    let calculatedTotal = 0;
+    let calculatedSubtotal = 0;
+    let calculatedDeliveryFee = 0;
+
+    // Process based on order type
+    switch (type) {
+      case 'business':
+        const businessResult = await validateBusinessOrder(items);
+        orderData.items = businessResult.orderItems;
+        orderData.subtotal = businessResult.subtotal;
+        orderData.deliveryFee = businessResult.deliveryFee;
+        orderData.total = businessResult.total;
+        storeIds = businessResult.storeIds;
+        break;
+
+      case 'errand':
+        const validatedErrandItems = validateErrandItems(errandItems);
+        orderData.errandItems = validatedErrandItems;
+        
+        // Calculate errand totals
+        calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        calculatedDeliveryFee = 1000; // Base delivery fee for errands
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+
+      case 'ticket':
+        const ticketData = validateTicketBooking({
+          busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
+        });
+        orderData.ticketData = ticketData;
+        
+        // Calculate ticket totals
+        calculatedSubtotal = ticketData.price || 5000; // Default ticket price
+        calculatedDeliveryFee = 1000; // Delivery fee for ticket
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+
+      case 'random':
+        const deliveryData = validateRandomDelivery({
+          pickupAddress: pickupAddress || deliveryAddress, // Use pickupAddress if provided, else use deliveryAddress
+          deliveryAddress: randomDeliveryAddress || deliveryAddress,
+          senderNumber,
+          receiverNumber,
+          itemDescription,
+          price: deliveryPrice
+        });
+        orderData.deliveryData = deliveryData;
+        
+        // Calculate delivery totals
+        calculatedSubtotal = deliveryData.price || 2000; // Base delivery price
+        calculatedDeliveryFee = 1000; // Service fee
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+    }
+
+    // Generate order number
+    const orderNumber = await generateOrderNumber();
+    orderData.orderNumber = orderNumber;
+
+    // Create order
+    const order = await Order.create([orderData], { session });
+    const createdOrder = order[0];
 
     // Populate order data
-    await order.populate({
-      path: "items.product",
-      select: "name images price featuredImage"
-    });
+    await createdOrder.populate('user', 'name phone');
+    
+    if (type === 'business') {
+      await createdOrder.populate({
+        path: "items.product",
+        select: "name images price featuredImage"
+      });
 
-    await order.populate({
-      path: "items.store",
-      select: "name deliveryTime"
-    });
+      await createdOrder.populate({
+        path: "items.store",
+        select: "name deliveryTime"
+      });
+    }
 
-    await order.populate({
-      path: "user",
-      select: "name phone",
-    });
+    // Send notifications (non-blocking)
+    const notificationResult = await sendOrderNotifications(createdOrder);
 
-    // Send store notifications (non-blocking)
-    const notificationResult = await sendStoreNotifications(
-      order,
-      Array.from(storeIds)
-    );
+    await session.commitTransaction();
 
-    // Success response
-    res.status(201).json({
-      success: true,
-      data: {
-        orderNumber: order.orderNumber,
-        status: order.status,
-        total: order.total,
-        deliveryFee: order.deliveryFee,
-        subtotal: order.subtotal,
-        items: order.items.map((item) => ({
+    // Format response based on order type
+    let responseData = {
+      orderNumber: createdOrder.orderNumber,
+      type: createdOrder.type,
+      status: createdOrder.status,
+      total: createdOrder.total,
+      deliveryFee: createdOrder.deliveryFee,
+      subtotal: createdOrder.subtotal,
+      deliveryAddress: createdOrder.deliveryAddress,
+      phone: createdOrder.phone,
+      notes: createdOrder.notes,
+      createdAt: createdOrder.createdAt,
+    };
+
+    // Add type-specific data to response
+    switch (type) {
+      case 'business':
+        responseData.items = createdOrder.items.map((item) => ({
           name: item.product.name,
           images: item.product.images || [],
           featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
@@ -376,20 +637,31 @@ const createOrder = async (req, res) => {
           quantity: item.quantity,
           store: item.store.name,
           deliveryTime: item.store.deliveryTime,
-        })),
-        deliveryAddress: order.deliveryAddress,
-        phone: order.phone,
-        notes: order.notes,
-        createdAt: order.createdAt,
-      },
-      notifications: {
-        method: notificationResult.method,
-        count: notificationResult.count,
-        message: notificationResult.message,
-      },
-      message: "Order created successfully!",
+        }));
+        break;
+
+      case 'errand':
+        responseData.errandItems = createdOrder.errandItems;
+        break;
+
+      case 'ticket':
+        responseData.ticketData = createdOrder.ticketData;
+        break;
+
+      case 'random':
+        responseData.deliveryData = createdOrder.deliveryData;
+        break;
+    }
+
+    res.status(201).json({
+      success: true,
+      data: responseData,
+      notifications: notificationResult,
+      message: `${type.charAt(0).toUpperCase() + type.slice(1)} order created successfully!`,
     });
+
   } catch (error) {
+    await session.abortTransaction();
     console.error("Order creation error:", error);
 
     if (error.code === 11000) {
@@ -399,23 +671,49 @@ const createOrder = async (req, res) => {
       });
     }
 
+    if (error.name === 'ValidationError' || error.message.includes('required')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Server error creating order",
       error: error.message,
     });
+  } finally {
+    session.endSession();
   }
 };
 
-// @desc    Create order for user (admin only)
+// @desc    Create order for user (admin only) - UPDATED FOR ALL TYPES
 // @route   POST /api/orders/admin/create
 // @access  Private/Admin
 const createOrderForUser = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const { items, deliveryAddress, phone, notes, userId, type } = req.body;
+    const { 
+      userId,
+      type = 'business',
+      items, 
+      deliveryAddress, 
+      phone, 
+      notes,
+      // Errand specific
+      errandItems,
+      // Ticket specific
+      busAgency, seatNumber, idCard, departureTime, destination, ticketPrice,
+      // Random delivery specific
+      pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
+    } = req.body;
 
     // Validate admin permissions
     if (req.user.role !== 'admin') {
+      await session.abortTransaction();
       return res.status(403).json({
         success: false,
         message: "Access denied. Admin privileges required."
@@ -424,20 +722,23 @@ const createOrderForUser = async (req, res) => {
 
     // Validate required fields
     if (!userId) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: "User ID is required to create order on behalf of user"
       });
     }
 
-    if (!items || items.length === 0) {
+    if (!['business', 'errand', 'ticket', 'random'].includes(type)) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: "No items in order",
+        message: "Valid order type is required (business, errand, ticket, random)"
       });
     }
 
     if (!deliveryAddress || !phone) {
+      await session.abortTransaction();
       return res.status(400).json({
         success: false,
         message: "Delivery address and phone are required",
@@ -447,144 +748,180 @@ const createOrderForUser = async (req, res) => {
     // Verify user exists
     const user = await User.findById(userId);
     if (!user) {
+      await session.abortTransaction();
       return res.status(404).json({
         success: false,
         message: "User not found"
       });
     }
 
-    // Process items and calculate totals
-    let subtotal = 0;
-    const orderItems = [];
-    const businessDeliveryFees = new Map();
-    const businessIds = new Set();
-
-    for (const item of items) {
-      const product = await Product.findById(item.product).populate("business");
-
-      if (!product) {
-        return res.status(404).json({
-          success: false,
-          message: `Product not found: ${item.product}`,
-        });
-      }
-
-      if (!product.inStock) {
-        return res.status(400).json({
-          success: false,
-          message: `${product.name} is out of stock`,
-        });
-      }
-
-      const price =
-        product.discount > 0
-          ? product.price * (1 - product.discount / 100)
-          : product.price;
-
-      const itemTotal = price * item.quantity;
-      subtotal += itemTotal;
-
-      const businessId = product.business._id.toString();
-      businessIds.add(businessId);
-
-      if (!businessDeliveryFees.has(businessId)) {
-        businessDeliveryFees.set(businessId, product.business.deliveryFee || 1000);
-      }
-
-      orderItems.push({
-        product: product._id,
-        business: product.business._id,
-        quantity: item.quantity,
-        price: price,
-      });
-    }
-
-    // Calculate delivery fee
-    const totalBusinessDeliveryFees = Array.from(
-      businessDeliveryFees.values()
-    ).reduce((sum, fee) => sum + fee, 0);
-    const deliveryFee = Math.round(totalBusinessDeliveryFees);
-    const total = subtotal + deliveryFee;
-
-    // Generate order number
-    const orderNumber = await generateOrderNumber();
-
-    // Create order
-    const order = await Order.create({
-      orderNumber,
+    let orderData = {
       user: userId,
-      items: orderItems,
       type,
-      subtotal,
-      deliveryFee,
-      total,
       deliveryAddress,
       phone,
       notes: notes || "",
       createdBy: req.user._id,
       isAdminCreated: true
-    });
+    };
+
+    let storeIds = [];
+    let calculatedTotal = 0;
+    let calculatedSubtotal = 0;
+    let calculatedDeliveryFee = 0;
+
+    // Process based on order type
+    switch (type) {
+      case 'business':
+        if (!items || items.length === 0) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: "No items in order",
+          });
+        }
+
+        const businessResult = await validateBusinessOrder(items);
+        orderData.items = businessResult.orderItems;
+        orderData.subtotal = businessResult.subtotal;
+        orderData.deliveryFee = businessResult.deliveryFee;
+        orderData.total = businessResult.total;
+        storeIds = businessResult.storeIds;
+        break;
+
+      case 'errand':
+        const validatedErrandItems = validateErrandItems(errandItems);
+        orderData.errandItems = validatedErrandItems;
+        
+        calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        calculatedDeliveryFee = 1000;
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+
+      case 'ticket':
+        const ticketData = validateTicketBooking({
+          busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
+        });
+        orderData.ticketData = ticketData;
+        
+        calculatedSubtotal = ticketData.price || 5000;
+        calculatedDeliveryFee = 1000;
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+
+      case 'random':
+        const deliveryData = validateRandomDelivery({
+          pickupAddress: pickupAddress || deliveryAddress,
+          deliveryAddress: randomDeliveryAddress || deliveryAddress,
+          senderNumber,
+          receiverNumber,
+          itemDescription,
+          price: deliveryPrice
+        });
+        orderData.deliveryData = deliveryData;
+        
+        calculatedSubtotal = deliveryData.price || 2000;
+        calculatedDeliveryFee = 1000;
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+    }
+
+    // Generate order number
+    const orderNumber = await generateOrderNumber();
+    orderData.orderNumber = orderNumber;
+
+    // Create order
+    const order = await Order.create([orderData], { session });
+    const createdOrder = order[0];
 
     // Populate order data
-    await order.populate({
-      path: "items.product",
-      select: "name images price featuredImage"
-    });
+    await createdOrder.populate('user', 'name phone email');
+    
+    if (type === 'business') {
+      await createdOrder.populate({
+        path: "items.product",
+        select: "name images price featuredImage"
+      });
 
-    await order.populate({
-      path: "items.business",
-      select: "name deliveryTime phone address"
-    });
+      await createdOrder.populate({
+        path: "items.store",
+        select: "name deliveryTime phone address"
+      });
+    }
 
-    await order.populate({
-      path: "user",
-      select: "name phone email",
-    });
+    // Send notifications
+    const notificationResult = await sendOrderNotifications(createdOrder);
 
-    // Send business notifications (updated function name)
-    const notificationResult = await sendStoreNotifications(
-      order,
-      Array.from(businessIds)
-    );
+    await session.commitTransaction();
 
-    // Success response
-    res.status(201).json({
-      success: true,
-      data: {
-        orderNumber: order.orderNumber,
-        status: order.status,
-        total: order.total,
-        type: order.type,
-        deliveryFee: order.deliveryFee,
-        subtotal: order.subtotal,
-        customer: {
-          name: order.user.name,
-          phone: order.user.phone,
-          email: order.user.email
-        },
-        items: order.items.map((item) => ({
+    // Format response
+    let responseData = {
+      orderNumber: createdOrder.orderNumber,
+      type: createdOrder.type,
+      status: createdOrder.status,
+      total: createdOrder.total,
+      deliveryFee: createdOrder.deliveryFee,
+      subtotal: createdOrder.subtotal,
+      customer: {
+        name: createdOrder.user.name,
+        phone: createdOrder.user.phone,
+        email: createdOrder.user.email
+      },
+      deliveryAddress: createdOrder.deliveryAddress,
+      phone: createdOrder.phone,
+      notes: createdOrder.notes,
+      createdAt: createdOrder.createdAt,
+      createdBy: 'admin'
+    };
+
+    // Add type-specific data
+    switch (type) {
+      case 'business':
+        responseData.items = createdOrder.items.map((item) => ({
           name: item.product.name,
           images: item.product.images || [],
           featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          business: item.business.name,
-          deliveryTime: item.business.deliveryTime,
-        })),
-        deliveryAddress: order.deliveryAddress,
-        phone: order.phone,
-        notes: order.notes,
-        createdAt: order.createdAt,
-        createdBy: 'admin'
-      },
-      notifications: {
-        method: notificationResult.method,
-        count: notificationResult.count,
-        message: notificationResult.message,
-      },
-      message: "Order created successfully for user!",
+          store: item.store.name,
+          deliveryTime: item.store.deliveryTime,
+        }));
+        break;
+
+      case 'errand':
+        responseData.errandItems = createdOrder.errandItems;
+        break;
+
+      case 'ticket':
+        responseData.ticketData = createdOrder.ticketData;
+        break;
+
+      case 'random':
+        responseData.deliveryData = createdOrder.deliveryData;
+        break;
+    }
+
+    res.status(201).json({
+      success: true,
+      data: responseData,
+      notifications: notificationResult,
+      message: `${type.charAt(0).toUpperCase() + type.slice(1)} order created successfully for user!`,
     });
+
   } catch (error) {
+    await session.abortTransaction();
     console.error("Admin order creation error:", error);
 
     if (error.code === 11000) {
@@ -594,15 +931,28 @@ const createOrderForUser = async (req, res) => {
       });
     }
 
+    if (error.name === 'ValidationError' || error.message.includes('required')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: "Server error creating order for user",
       error: error.message,
     });
+  } finally {
+    session.endSession();
   }
 };
 
-// Get user orders
+// ================================
+// ORDER RETRIEVAL - ALL TYPES
+// ================================
+
+// Get user orders (all types)
 const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id })
@@ -614,31 +964,54 @@ const getMyOrders = async (req, res) => {
         path: 'items.store',
         select: 'name deliveryTime'
       })
-      .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt deliveredAt')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt')
       .sort({ createdAt: -1 });
 
-    const formattedOrders = orders.map(order => ({
-      orderNumber: order.orderNumber,
-      status: order.status,
-      total: order.total,
-      deliveryFee: order.deliveryFee,
-      subtotal: order.subtotal,
-      items: order.items.map(item => ({
-        name: item.product?.name || 'Product not found',
-        images: item.product?.images || [],
-        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-        price: item.price,
-        quantity: item.quantity,
-        store: item.store?.name || 'Store not found',
-        deliveryTime: item.store?.deliveryTime || 'N/A'
-      })),
-      deliveryAddress: order.deliveryAddress,
-      phone: order.phone,
-      notes: order.notes,
-      acceptedAt: order.acceptedAt,
-      deliveredAt: order.deliveredAt,
-      createdAt: order.createdAt
-    }));
+    const formattedOrders = orders.map(order => {
+      const baseOrder = {
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        subtotal: order.subtotal,
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes,
+        acceptedAt: order.acceptedAt,
+        deliveredAt: order.deliveredAt,
+        createdAt: order.createdAt
+      };
+
+      // Add type-specific data
+      switch (order.type) {
+        case 'business':
+          baseOrder.items = order.items.map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            store: item.store?.name || 'Store not found',
+            deliveryTime: item.store?.deliveryTime || 'N/A'
+          }));
+          break;
+
+        case 'errand':
+          baseOrder.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseOrder.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseOrder.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseOrder;
+    });
 
     res.json({
       success: true,
@@ -653,7 +1026,7 @@ const getMyOrders = async (req, res) => {
   }
 };
 
-// Get single order
+// Get single order with all type data
 const getOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
@@ -669,17 +1042,17 @@ const getOrder = async (req, res) => {
       });
     }
     
-    // Format the response to include images
+    // Format the response to include type-specific data
     const formattedOrder = {
       ...order.toObject(),
-      items: order.items.map(item => ({
+      items: order.type === 'business' ? order.items.map(item => ({
         ...item,
         product: {
           ...item.product,
           images: item.product?.images || [],
           featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || '')
         }
-      }))
+      })) : undefined
     };
     
     res.json({ 
@@ -694,6 +1067,10 @@ const getOrder = async (req, res) => {
     });
   }
 };
+
+// ================================
+// EXISTING FUNCTIONS (UNCHANGED)
+// ================================
 
 // Get all pending orders (for riders/drivers)
 const getPendingOrders = async (req, res) => {
@@ -713,42 +1090,65 @@ const getPendingOrders = async (req, res) => {
         path: 'items.store',
         select: 'name phone address deliveryTime coordinates'
       })
-      .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt updatedAt')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt updatedAt')
       .sort({ createdAt: -1 });
 
     console.log(`✅ Found ${pendingOrders.length} pending orders`);
 
-    const formattedOrders = pendingOrders.map(order => ({
-      _id: order._id,
-      orderNumber: order.orderNumber,
-      status: order.status,
-      total: order.total,
-      deliveryFee: order.deliveryFee,
-      subtotal: order.subtotal,
-      customer: {
-        name: order.user?.name || 'Customer',
-        phone: order.user?.phone || order.phone
-      },
-      items: order.items.map(item => ({
-        name: item.product?.name || 'Product not found',
-        images: item.product?.images || [],
-        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-        price: item.price,
-        quantity: item.quantity,
-        store: {
-          name: item.store?.name || 'Store not found',
-          phone: item.store?.phone || '',
-          address: item.store?.address || '',
-          deliveryTime: item.store?.deliveryTime || 'N/A',
-          coordinates: item.store?.coordinates || null
-        }
-      })),
-      deliveryAddress: order.deliveryAddress,
-      phone: order.phone,
-      notes: order.notes || 'No special instructions',
-      createdAt: order.createdAt,
-      updatedAt: order.updatedAt
-    }));
+    const formattedOrders = pendingOrders.map(order => {
+      const baseOrder = {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        subtotal: order.subtotal,
+        customer: {
+          name: order.user?.name || 'Customer',
+          phone: order.user?.phone || order.phone
+        },
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes || 'No special instructions',
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt
+      };
+
+      // Add type-specific items
+      switch (order.type) {
+        case 'business':
+          baseOrder.items = order.items.map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            store: {
+              name: item.store?.name || 'Store not found',
+              phone: item.store?.phone || '',
+              address: item.store?.address || '',
+              deliveryTime: item.store?.deliveryTime || 'N/A',
+              coordinates: item.store?.coordinates || null
+            }
+          }));
+          break;
+
+        case 'errand':
+          baseOrder.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseOrder.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseOrder.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseOrder;
+    });
 
     res.json({
       success: true,
@@ -781,44 +1181,67 @@ const getMyCompletedDeliveries = async (req, res) => {
     .populate('user', 'name phone')
     .populate('items.product', 'name images price featuredImage')
     .populate('items.store', 'name address deliveryTime coordinates phone')
-    .select('orderNumber status total deliveryFee items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
+    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ deliveredAt: -1 })
     .lean();
 
     console.log(`✅ Found ${completedDeliveries.length} completed deliveries for rider ${riderId}`);
 
-    const formattedDeliveries = completedDeliveries.map(order => ({
-      _id: order._id,
-      orderNumber: order.orderNumber,
-      status: order.status,
-      total: order.total,
-      deliveryFee: order.deliveryFee,
-      customer: {
-        name: order.user?.name || 'Customer',
-        phone: order.user?.phone || order.phone
-      },
-      items: order.items.map(item => ({
-        name: item.product?.name || 'Product not found',
-        images: item.product?.images || [],
-        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-        price: item.price,
-        quantity: item.quantity,
-        store: {
-          name: item.store?.name || 'Store not found',
-          phone: item.store?.phone || '',
-          address: item.store?.address || '',
-          deliveryTime: item.store?.deliveryTime || 'N/A',
-          coordinates: item.store?.coordinates || null
-        }
-      })),
-      deliveryAddress: order.deliveryAddress,
-      phone: order.phone,
-      notes: order.notes || '',
-      acceptedAt: order.acceptedAt,
-      pickedUpAt: order.pickedUpAt,
-      deliveredAt: order.deliveredAt,
-      createdAt: order.createdAt
-    }));
+    const formattedDeliveries = completedDeliveries.map(order => {
+      const baseDelivery = {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        customer: {
+          name: order.user?.name || 'Customer',
+          phone: order.user?.phone || order.phone
+        },
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes || '',
+        acceptedAt: order.acceptedAt,
+        pickedUpAt: order.pickedUpAt,
+        deliveredAt: order.deliveredAt,
+        createdAt: order.createdAt
+      };
+
+      // Add type-specific items
+      switch (order.type) {
+        case 'business':
+          baseDelivery.items = order.items.map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            store: {
+              name: item.store?.name || 'Store not found',
+              phone: item.store?.phone || '',
+              address: item.store?.address || '',
+              deliveryTime: item.store?.deliveryTime || 'N/A',
+              coordinates: item.store?.coordinates || null
+            }
+          }));
+          break;
+
+        case 'errand':
+          baseDelivery.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseDelivery.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseDelivery.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseDelivery;
+    });
 
     res.json({
       success: true,
@@ -911,6 +1334,7 @@ const acceptDelivery = async (req, res) => {
     const responseData = {
       _id: order._id,
       orderNumber: order.orderNumber,
+      type: order.type,
       status: order.status,
       total: order.total,
       deliveryFee: order.deliveryFee,
@@ -918,24 +1342,42 @@ const acceptDelivery = async (req, res) => {
         name: order.user?.name || 'Customer',
         phone: order.user?.phone || order.phone
       },
-      items: order.items.map(item => ({
-        name: item.product?.name || 'Product not found',
-        images: item.product?.images || [],
-        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-        price: item.price,
-        quantity: item.quantity,
-        store: {
-          name: item.store?.name || 'Store not found',
-          address: item.store?.address || '',
-          phone: item.store?.phone || '',
-          deliveryTime: item.store?.deliveryTime || 'N/A',
-          coordinates: item.store?.coordinates || null
-        }
-      })),
       deliveryAddress: order.deliveryAddress,
       acceptedAt: order.acceptedAt, // ✅ Now properly set
       createdAt: order.createdAt
     };
+
+    // Add type-specific items
+    switch (order.type) {
+      case 'business':
+        responseData.items = order.items.map(item => ({
+          name: item.product?.name || 'Product not found',
+          images: item.product?.images || [],
+          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+          price: item.price,
+          quantity: item.quantity,
+          store: {
+            name: item.store?.name || 'Store not found',
+            address: item.store?.address || '',
+            phone: item.store?.phone || '',
+            deliveryTime: item.store?.deliveryTime || 'N/A',
+            coordinates: item.store?.coordinates || null
+          }
+        }));
+        break;
+
+      case 'errand':
+        responseData.errandItems = order.errandItems;
+        break;
+
+      case 'ticket':
+        responseData.ticketData = order.ticketData;
+        break;
+
+      case 'random':
+        responseData.deliveryData = order.deliveryData;
+        break;
+    }
 
     res.json({
       success: true,
@@ -1032,6 +1474,7 @@ const rejectDelivery = async (req, res) => {
       success: true,
       data: {
         orderNumber: order.orderNumber,
+        type: order.type,
         status: order.status,
         rejectedAt: order.rejectedAt
       },
@@ -1073,44 +1516,67 @@ const getMyActiveDeliveries = async (req, res) => {
     .populate('user', 'name phone')
     .populate('items.product', 'name images price featuredImage')
     .populate('items.store', 'name address deliveryTime coordinates phone')
-    .select('orderNumber status total deliveryFee items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
+    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ acceptedAt: -1 })
     .lean();
 
     console.log(`✅ Found ${activeDeliveries.length} active deliveries for rider ${riderId}`);
 
-    const formattedDeliveries = activeDeliveries.map(order => ({
-      _id: order._id,
-      orderNumber: order.orderNumber,
-      status: order.status,
-      total: order.total,
-      deliveryFee: order.deliveryFee,
-      customer: {
-        name: order.user?.name || 'Customer',
-        phone: order.user?.phone || order.phone
-      },
-      items: order.items.map(item => ({
-        name: item.product?.name || 'Product not found',
-        images: item.product?.images || [],
-        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-        price: item.price,
-        quantity: item.quantity,
-        store: {
-          name: item.store?.name || 'Store not found',
-          phone: item.store?.phone || '',
-          address: item.store?.address || '',
-          deliveryTime: item.store?.deliveryTime || 'N/A',
-          coordinates: item.store?.coordinates || null
-        }
-      })),
-      deliveryAddress: order.deliveryAddress,
-      phone: order.phone,
-      notes: order.notes || '',
-      acceptedAt: order.acceptedAt, // ✅ Now properly included
-      pickedUpAt: order.pickedUpAt,
-      deliveredAt: order.deliveredAt,
-      createdAt: order.createdAt
-    }));
+    const formattedDeliveries = activeDeliveries.map(order => {
+      const baseDelivery = {
+        _id: order._id,
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        customer: {
+          name: order.user?.name || 'Customer',
+          phone: order.user?.phone || order.phone
+        },
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes || '',
+        acceptedAt: order.acceptedAt, // ✅ Now properly included
+        pickedUpAt: order.pickedUpAt,
+        deliveredAt: order.deliveredAt,
+        createdAt: order.createdAt
+      };
+
+      // Add type-specific items
+      switch (order.type) {
+        case 'business':
+          baseDelivery.items = order.items.map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            store: {
+              name: item.store?.name || 'Store not found',
+              phone: item.store?.phone || '',
+              address: item.store?.address || '',
+              deliveryTime: item.store?.deliveryTime || 'N/A',
+              coordinates: item.store?.coordinates || null
+            }
+          }));
+          break;
+
+        case 'errand':
+          baseDelivery.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseDelivery.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseDelivery.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseDelivery;
+    });
 
     res.json({
       success: true,
@@ -1252,6 +1718,7 @@ const updateOrderStatus = async (req, res) => {
           success: true,
           data: {
             orderNumber: order.orderNumber,
+            type: order.type,
             status: order.status,
             acceptedAt: order.acceptedAt,
             pickedUpAt: order.pickedUpAt,
@@ -1323,6 +1790,7 @@ const updateOrderStatus = async (req, res) => {
         success: true,
         data: {
           orderNumber: order.orderNumber,
+          type: order.type,
           status: order.status,
           acceptedAt: order.acceptedAt,
           pickedUpAt: order.pickedUpAt,
@@ -1377,54 +1845,77 @@ const getAllOrders = async (req, res) => {
       .populate('user', 'name phone email')
       .populate('rider', 'name phone')
       .populate('items.product', 'name images price featuredImage')
-      .populate('items.business', 'name phone address deliveryTime')
-      .select('orderNumber status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated')
+      .populate('items.store', 'name phone address deliveryTime')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated')
       .sort({ createdAt: -1 });
 
     console.log(`✅ ADMIN - Found ${orders.length} total orders`);
 
     // Format orders for frontend
-    const formattedOrders = orders.map(order => ({
-      id: order._id,
-      orderNumber: order.orderNumber,
-      status: order.status,
-      total: order.total,
-      deliveryFee: order.deliveryFee,
-      subtotal: order.subtotal,
-      customer: {
-        name: order.user?.name || 'Customer',
-        phone: order.user?.phone || order.phone,
-        email: order.user?.email || 'N/A'
-      },
-      rider: order.rider ? {
-        name: order.rider.name,
-        phone: order.rider.phone
-      } : null,
-      items: order.items.map(item => ({
-        name: item.product?.name || 'Product not found',
-        images: item.product?.images || [],
-        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-        price: item.price,
-        quantity: item.quantity,
-        business: item.business ? {
-          name: item.business.name || 'Business not found',
-          phone: item.business.phone || '',
-          address: item.business.address || '',
-          deliveryTime: item.business.deliveryTime || 'N/A'
-        } : null
-      })),
-      deliveryAddress: order.deliveryAddress,
-      phone: order.phone,
-      notes: order.notes || '',
-      createdAt: order.createdAt,
-      acceptedAt: order.acceptedAt,
-      pickedUpAt: order.pickedUpAt,
-      deliveredAt: order.deliveredAt,
-      cancelledAt: order.cancelledAt,
-      // Additional admin info
-      createdBy: order.createdBy || 'customer',
-      isAdminCreated: order.isAdminCreated || false
-    }));
+    const formattedOrders = orders.map(order => {
+      const baseOrder = {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        subtotal: order.subtotal,
+        customer: {
+          name: order.user?.name || 'Customer',
+          phone: order.user?.phone || order.phone,
+          email: order.user?.email || 'N/A'
+        },
+        rider: order.rider ? {
+          name: order.rider.name,
+          phone: order.rider.phone
+        } : null,
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes || '',
+        createdAt: order.createdAt,
+        acceptedAt: order.acceptedAt,
+        pickedUpAt: order.pickedUpAt,
+        deliveredAt: order.deliveredAt,
+        cancelledAt: order.cancelledAt,
+        // Additional admin info
+        createdBy: order.createdBy || 'customer',
+        isAdminCreated: order.isAdminCreated || false
+      };
+
+      // Add type-specific items
+      switch (order.type) {
+        case 'business':
+          baseOrder.items = order.items.map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            store: item.store ? {
+              name: item.store.name || 'Store not found',
+              phone: item.store.phone || '',
+              address: item.store.address || '',
+              deliveryTime: item.store.deliveryTime || 'N/A'
+            } : null
+          }));
+          break;
+
+        case 'errand':
+          baseOrder.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseOrder.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseOrder.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseOrder;
+    });
 
     res.json({
       success: true,
@@ -1494,48 +1985,61 @@ const updateOrder = async (req, res) => {
     .populate('user', 'name phone email')
     .populate('rider', 'name phone')
     .populate('items.product', 'name images price featuredImage')
-    .populate('items.business', 'name phone');
+    .populate('items.store', 'name phone');
 
     console.log(`✅ ADMIN - Order ${id} updated successfully`);
 
+    const responseData = {
+      id: updatedOrder._id,
+      orderNumber: updatedOrder.orderNumber,
+      type: updatedOrder.type,
+      status: updatedOrder.status,
+      paymentStatus: updatedOrder.paymentStatus,
+      paymentMethod: updatedOrder.paymentMethod,
+      total: updatedOrder.total,
+      subtotal: updatedOrder.subtotal,
+      deliveryFee: updatedOrder.deliveryFee,
+      distance: updatedOrder.distance,
+      customer: {
+        name: updatedOrder.user?.name || 'Customer',
+        phone: updatedOrder.user?.phone || updatedOrder.phone,
+        email: updatedOrder.user?.email
+      },
+      rider: updatedOrder.rider ? {
+        name: updatedOrder.rider.name,
+        phone: updatedOrder.rider.phone
+      } : null,
+      deliveryAddress: updatedOrder.deliveryAddress,
+      phone: updatedOrder.phone,
+      notes: updatedOrder.notes || '',
+      createdAt: updatedOrder.createdAt,
+      acceptedAt: updatedOrder.acceptedAt,
+      pickedUpAt: updatedOrder.pickedUpAt,
+      deliveredAt: updatedOrder.deliveredAt,
+      cancelledAt: updatedOrder.cancelledAt
+    };
+
+    // Add type-specific items
+    if (updatedOrder.type === 'business') {
+      responseData.items = updatedOrder.items.map(item => ({
+        name: item.product?.name || 'Product not found',
+        images: item.product?.images || [],
+        featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+        price: item.price,
+        quantity: item.quantity,
+        store: item.store?.name || 'Store not found'
+      }));
+    } else if (updatedOrder.type === 'errand') {
+      responseData.errandItems = updatedOrder.errandItems;
+    } else if (updatedOrder.type === 'ticket') {
+      responseData.ticketData = updatedOrder.ticketData;
+    } else if (updatedOrder.type === 'random') {
+      responseData.deliveryData = updatedOrder.deliveryData;
+    }
+
     res.json({
       success: true,
-      data: {
-        id: updatedOrder._id,
-        orderNumber: updatedOrder.orderNumber,
-        status: updatedOrder.status,
-        paymentStatus: updatedOrder.paymentStatus,
-        paymentMethod: updatedOrder.paymentMethod,
-        total: updatedOrder.total,
-        subtotal: updatedOrder.subtotal,
-        deliveryFee: updatedOrder.deliveryFee,
-        distance: updatedOrder.distance,
-        customer: {
-          name: updatedOrder.user?.name || 'Customer',
-          phone: updatedOrder.user?.phone || updatedOrder.phone,
-          email: updatedOrder.user?.email
-        },
-        rider: updatedOrder.rider ? {
-          name: updatedOrder.rider.name,
-          phone: updatedOrder.rider.phone
-        } : null,
-        items: updatedOrder.items.map(item => ({
-          name: item.product?.name || 'Product not found',
-          images: item.product?.images || [],
-          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
-          price: item.price,
-          quantity: item.quantity,
-          business: item.business?.name || 'Business not found'
-        })),
-        deliveryAddress: updatedOrder.deliveryAddress,
-        phone: updatedOrder.phone,
-        notes: updatedOrder.notes || '',
-        createdAt: updatedOrder.createdAt,
-        acceptedAt: updatedOrder.acceptedAt,
-        pickedUpAt: updatedOrder.pickedUpAt,
-        deliveredAt: updatedOrder.deliveredAt,
-        cancelledAt: updatedOrder.cancelledAt
-      },
+      data: responseData,
       message: 'Order updated successfully'
     });
 
