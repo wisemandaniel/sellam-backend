@@ -1892,7 +1892,7 @@ const getAllOrders = async (req, res) => {
           select: 'name phone address deliveryTime'
         }
       })
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated paymentStatus paymentMethod distance rejectedBy rejectedAt')
       .sort({ createdAt: -1 });
 
     console.log(`✅ ADMIN - Found ${orders.length} total orders`);
@@ -1907,26 +1907,36 @@ const getAllOrders = async (req, res) => {
         total: order.total,
         deliveryFee: order.deliveryFee,
         subtotal: order.subtotal,
+        // Payment fields
+        paymentStatus: order.paymentStatus || 'unpaid',
+        paymentMethod: order.paymentMethod || 'cash',
+        distance: order.distance || 0,
+        // Customer information
         customer: {
           name: order.user?.name || 'Customer',
           phone: order.user?.phone || order.phone,
           email: order.user?.email || 'N/A'
         },
+        // Rider information
         rider: order.rider ? {
           name: order.rider.name,
           phone: order.rider.phone
         } : null,
+        // Delivery information
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
         notes: order.notes || '',
+        // Timestamps
         createdAt: order.createdAt,
         acceptedAt: order.acceptedAt,
         pickedUpAt: order.pickedUpAt,
         deliveredAt: order.deliveredAt,
         cancelledAt: order.cancelledAt,
+        rejectedAt: order.rejectedAt,
         // Additional admin info
         createdBy: order.createdBy || 'customer',
-        isAdminCreated: order.isAdminCreated || false
+        isAdminCreated: order.isAdminCreated || false,
+        rejectedBy: order.rejectedBy || null
       };
 
       // Add type-specific items
