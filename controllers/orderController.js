@@ -2175,6 +2175,267 @@ const deleteOrder = async (req, res) => {
   }
 };
 
+
+// @desc    Get rider's orders with status filter (admin only)
+// @route   GET /api/orders/rider/:riderId
+// @access  Private/Admin
+const getRiderOrders = async (req, res) => {
+  try {
+    const { riderId } = req.params;
+    const { status, startDate, endDate, page = 1, limit = 20 } = req.query;
+
+    console.log(`📊 ADMIN - Fetching orders for rider ${riderId} with filters:`, {
+      status,
+      startDate,
+      endDate,
+      page,
+      limit
+    });
+
+    // Validate rider exists and get commission rate
+    const rider = await User.findById(riderId).select('name phone email role commission');
+    if (!rider) {
+      return res.status(404).json({
+        success: false,
+        message: 'Rider not found'
+      });
+    }
+
+    if (!['rider', 'admin'].includes(rider.role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'User is not a rider'
+      });
+    }
+
+    // Get commission rate (default to 75% if not set)
+    const commissionRate = rider.commission || 0.75;
+
+    // Build query
+    const query = { rider: riderId };
+    
+    // Add status filter if provided
+    if (status) {
+      if (status === 'all') {
+        // Include all orders except pending (since rider can only accept pending orders)
+        query.status = { $in: ['accepted', 'picked_up', 'delivered', 'cancelled', 'rejected'] };
+      } else if (status === 'active') {
+        query.status = { $in: ['accepted', 'picked_up'] };
+      } else if (status === 'completed') {
+        query.status = 'delivered';
+      } else {
+        query.status = status;
+      }
+    }
+
+    // Add date range filter if provided
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+      if (endDate) {
+        query.createdAt.$lte = new Date(endDate);
+      }
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Get orders with pagination
+    const orders = await Order.find(query)
+      .populate('user', 'name phone')
+      .populate({
+        path: 'items.product',
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name address phone deliveryTime'
+        }
+      })
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Order.countDocuments(query);
+
+    console.log(`✅ ADMIN - Found ${orders.length} orders for rider ${riderId}`);
+
+    // Format orders and calculate earnings with commission
+    let totalDeliveryFees = 0;
+    let totalRiderEarnings = 0;
+
+    const formattedOrders = orders.map(order => {
+      // Calculate rider's earnings for this order (after commission)
+      const deliveryFee = order.deliveryFee || 0;
+      const riderEarnings = Math.round(deliveryFee * commissionRate * 100) / 100;
+      
+      // Accumulate totals
+      totalDeliveryFees += deliveryFee;
+      totalRiderEarnings += riderEarnings;
+
+      const baseOrder = {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: deliveryFee,
+        riderEarnings: riderEarnings, // Add rider's actual earnings to each order
+        commissionRate: commissionRate, // Include commission rate in response
+        subtotal: order.subtotal,
+        // Payment info
+        paymentStatus: order.paymentStatus || 'unpaid',
+        paymentMethod: order.paymentMethod || 'cash',
+        distance: order.distance || 0,
+        // Customer info
+        customer: {
+          name: order.user?.name || 'Customer',
+          phone: order.user?.phone || order.phone
+        },
+        // Delivery info
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes || '',
+        // Timestamps
+        createdAt: order.createdAt,
+        acceptedAt: order.acceptedAt,
+        pickedUpAt: order.pickedUpAt,
+        deliveredAt: order.deliveredAt,
+        cancelledAt: order.cancelledAt,
+        rejectedAt: order.rejectedAt
+      };
+
+      // Add type-specific items
+      switch (order.type) {
+        case 'business':
+          baseOrder.items = order.items.map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            business: item.product?.business ? {
+              name: item.product.business.name || 'Business not found',
+              phone: item.product.business.phone || '',
+              address: item.product.business.address || '',
+              deliveryTime: item.product.business.deliveryTime || 'N/A'
+            } : null
+          }));
+          break;
+
+        case 'errand':
+          baseOrder.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseOrder.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseOrder.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseOrder;
+    });
+
+    // Calculate rider statistics with commission
+    const completedOrdersCount = await Order.countDocuments({ 
+      rider: riderId, 
+      status: 'delivered' 
+    });
+
+    const activeOrdersCount = await Order.countDocuments({ 
+      rider: riderId, 
+      status: { $in: ['accepted', 'picked_up'] } 
+    });
+
+    const cancelledOrdersCount = await Order.countDocuments({ 
+      rider: riderId, 
+      status: 'cancelled' 
+    });
+
+    const totalOrdersCount = await Order.countDocuments({ rider: riderId });
+
+    // Calculate total earnings using aggregation for accuracy
+    const earningsResult = await Order.aggregate([
+      { 
+        $match: { 
+          rider: new mongoose.Types.ObjectId(riderId),
+          status: 'delivered'
+        } 
+      },
+      {
+        $group: {
+          _id: null,
+          totalDeliveryFees: { $sum: '$deliveryFee' },
+          orderCount: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const aggregatedTotalDeliveryFees = earningsResult[0]?.totalDeliveryFees || 0;
+    const calculatedTotalEarnings = Math.round(aggregatedTotalDeliveryFees * commissionRate * 100) / 100;
+
+    const stats = {
+      totalOrders: totalOrdersCount,
+      completedOrders: completedOrdersCount,
+      activeOrders: activeOrdersCount,
+      cancelledOrders: cancelledOrdersCount,
+      totalDeliveryFees: aggregatedTotalDeliveryFees, // Total delivery fees before commission
+      totalEarnings: calculatedTotalEarnings, // Rider's actual earnings after commission
+      commissionRate: commissionRate, // Rider's commission rate
+      platformShare: Math.round(aggregatedTotalDeliveryFees * (1 - commissionRate) * 100) / 100 // Platform's share
+    };
+
+    res.json({
+      success: true,
+      data: {
+        rider: {
+          id: rider._id,
+          name: rider.name,
+          phone: rider.phone,
+          email: rider.email,
+          role: rider.role,
+          commission: commissionRate // Include commission in rider info
+        },
+        orders: formattedOrders,
+        statistics: stats,
+        pagination: {
+          current: pageNum,
+          pages: Math.ceil(total / limitNum),
+          total,
+          hasNext: pageNum < Math.ceil(total / limitNum),
+          hasPrev: pageNum > 1
+        }
+      },
+      message: `Found ${formattedOrders.length} orders for rider ${rider.name}`
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - GET RIDER ORDERS ERROR:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid rider ID'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch rider orders',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createOrder,
   getMyOrders,
@@ -2189,5 +2450,6 @@ module.exports = {
   getAllOrders,
   updateOrder,
   deleteOrder,
-  createOrderForUser
+  createOrderForUser,
+  getRiderOrders
 };

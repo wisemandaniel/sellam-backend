@@ -954,6 +954,301 @@ const removeDevice = async (req, res) => {
   }
 };
 
+// Add this import at the top if not already present
+const Order = require("../models/Order");
+
+// @desc    Get all riders with complete stats, deliveries, and financial information
+// @route   GET /api/users/admin/riders/stats
+// @access  Private/Admin
+const getAllRidersWithStats = async (req, res) => {
+  try {
+    console.log('👥 ADMIN - Fetching all riders with complete stats...');
+
+    // Get all users with rider role
+    const riders = await User.find({ role: 'rider' })
+      .select('name phone email avatar status createdAt lastLogin isActive address vehicleType licensePlate')
+      .lean();
+
+    console.log(`✅ Found ${riders.length} riders`);
+
+    // Get accounts for all riders
+    const riderIds = riders.map(rider => rider._id);
+    const accounts = await Account.find({ user: { $in: riderIds } })
+      .select('user totalEarnings totalDeliveries completedDeliveries rejectedDeliveries cancelledDeliveries averageRating totalReviews performanceScore ranking vehicleType vehicleModel licensePlate status online')
+      .lean();
+
+    // Create account map for quick lookup
+    const accountMap = new Map();
+    accounts.forEach(account => {
+      accountMap.set(account.user.toString(), account);
+    });
+
+    // Get ALL orders for these riders (all statuses)
+    const allRiderOrders = await Order.find({ 
+      rider: { $in: riderIds } 
+    })
+    .populate('user', 'name phone')
+    .populate({
+      path: 'items.product',
+      select: 'name images price business',
+      populate: {
+        path: 'business',
+        select: 'name phone address'
+      }
+    })
+    .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
+    .sort({ createdAt: -1 })
+    .lean();
+
+    console.log(`📦 Found ${allRiderOrders.length} total orders for all riders`);
+
+    // Group orders by rider
+    const ordersByRider = new Map();
+    allRiderOrders.forEach(order => {
+      if (order.rider) {
+        const riderId = order.rider.toString();
+        if (!ordersByRider.has(riderId)) {
+          ordersByRider.set(riderId, []);
+        }
+        ordersByRider.get(riderId).push(order);
+      }
+    });
+
+    // Calculate comprehensive stats for each rider
+    const ridersWithStats = riders.map(rider => {
+      const riderId = rider._id.toString();
+      const account = accountMap.get(riderId);
+      const riderOrders = ordersByRider.get(riderId) || [];
+      
+      // Count orders by status
+      const statusCounts = {
+        pending: 0,
+        accepted: 0,
+        picked_up: 0,
+        delivered: 0,
+        cancelled: 0,
+        rejected: 0
+      };
+
+      // Financial calculations
+      let totalEarnings = 0;
+      let completedEarnings = 0;
+      let pendingEarnings = 0;
+      let thisMonthEarnings = 0;
+      let lastMonthEarnings = 0;
+
+      // Performance metrics
+      let totalDeliveryTime = 0;
+      let completedCount = 0;
+      const currentMonth = new Date().getMonth();
+      const currentYear = new Date().getFullYear();
+
+      riderOrders.forEach(order => {
+        // Count by status
+        statusCounts[order.status] = (statusCounts[order.status] || 0) + 1;
+
+        // Calculate earnings (75% of delivery fee as default commission)
+        const driverShare = Math.round(Number(order.deliveryFee) * 0.75 * 100) / 100;
+        
+        if (order.status === 'delivered') {
+          totalEarnings += driverShare;
+          completedEarnings += driverShare;
+          completedCount++;
+
+          // Calculate delivery time for completed orders
+          if (order.acceptedAt && order.deliveredAt) {
+            const deliveryTime = (new Date(order.deliveredAt) - new Date(order.acceptedAt)) / (1000 * 60); // in minutes
+            totalDeliveryTime += deliveryTime;
+          }
+
+          // Monthly earnings
+          if (order.deliveredAt) {
+            const deliveredDate = new Date(order.deliveredAt);
+            if (deliveredDate.getMonth() === currentMonth && deliveredDate.getFullYear() === currentYear) {
+              thisMonthEarnings += driverShare;
+            }
+            if (deliveredDate.getMonth() === currentMonth - 1 && deliveredDate.getFullYear() === currentYear) {
+              lastMonthEarnings += driverShare;
+            }
+          }
+        } else if (['accepted', 'picked_up'].includes(order.status)) {
+          pendingEarnings += driverShare;
+        }
+      });
+
+      // Calculate averages
+      const averageDeliveryTime = completedCount > 0 ? totalDeliveryTime / completedCount : 0;
+      const completionRate = riderOrders.length > 0 ? (completedCount / riderOrders.length) * 100 : 0;
+
+      // Response data structure
+      return {
+        rider: {
+          id: rider._id,
+          name: rider.name,
+          phone: rider.phone,
+          email: rider.email,
+          avatar: rider.avatar,
+          status: rider.status,
+          isActive: rider.isActive,
+          address: rider.address,
+          vehicleType: rider.vehicleType,
+          licensePlate: rider.licensePlate,
+          joinedDate: rider.createdAt,
+          lastLogin: rider.lastLogin
+        },
+        account: account ? {
+          totalEarnings: account.totalEarnings || totalEarnings,
+          totalDeliveries: account.totalDeliveries || riderOrders.length,
+          completedDeliveries: account.completedDeliveries || completedCount,
+          rejectedDeliveries: account.rejectedDeliveries || statusCounts.rejected,
+          cancelledDeliveries: account.cancelledDeliveries || statusCounts.cancelled,
+          averageRating: account.averageRating || 0,
+          totalReviews: account.totalReviews || 0,
+          performanceScore: account.performanceScore || 0,
+          ranking: account.ranking || 'Bronze',
+          vehicleType: account.vehicleType || 'bike',
+          vehicleModel: account.vehicleModel || '',
+          licensePlate: account.licensePlate || '',
+          online: account.online || false,
+          accountStatus: account.status || 'active'
+        } : {
+          totalEarnings: 0,
+          totalDeliveries: 0,
+          completedDeliveries: 0,
+          rejectedDeliveries: 0,
+          cancelledDeliveries: 0,
+          averageRating: 0,
+          totalReviews: 0,
+          performanceScore: 0,
+          ranking: 'Bronze',
+          vehicleType: 'bike',
+          vehicleModel: '',
+          licensePlate: '',
+          online: false,
+          accountStatus: 'inactive'
+        },
+        financial: {
+          totalEarnings: Math.round(totalEarnings * 100) / 100,
+          completedEarnings: Math.round(completedEarnings * 100) / 100,
+          pendingEarnings: Math.round(pendingEarnings * 100) / 100,
+          thisMonthEarnings: Math.round(thisMonthEarnings * 100) / 100,
+          lastMonthEarnings: Math.round(lastMonthEarnings * 100) / 100,
+          estimatedCommissionRate: '75%', // Default commission rate
+          averageEarningPerDelivery: completedCount > 0 ? Math.round((completedEarnings / completedCount) * 100) / 100 : 0
+        },
+        performance: {
+          totalOrders: riderOrders.length,
+          completedOrders: completedCount,
+          completionRate: Math.round(completionRate * 100) / 100,
+          averageDeliveryTime: Math.round(averageDeliveryTime * 100) / 100,
+          statusBreakdown: statusCounts,
+          acceptanceRate: riderOrders.length > 0 ? 
+            Math.round(((riderOrders.length - statusCounts.rejected) / riderOrders.length) * 100 * 100) / 100 : 0
+        },
+        deliveries: {
+          total: riderOrders.length,
+          orders: riderOrders.map(order => ({
+            id: order._id,
+            orderNumber: order.orderNumber,
+            type: order.type,
+            status: order.status,
+            total: order.total,
+            deliveryFee: order.deliveryFee,
+            riderEarnings: Math.round(Number(order.deliveryFee) * 0.75 * 100) / 100,
+            customer: {
+              name: order.user?.name || 'Customer',
+              phone: order.user?.phone || order.phone
+            },
+            deliveryAddress: order.deliveryAddress,
+            paymentStatus: order.paymentStatus || 'unpaid',
+            paymentMethod: order.paymentMethod || 'cash',
+            distance: order.distance || 0,
+            createdAt: order.createdAt,
+            acceptedAt: order.acceptedAt,
+            pickedUpAt: order.pickedUpAt,
+            deliveredAt: order.deliveredAt,
+            cancelledAt: order.cancelledAt,
+            // Type-specific data
+            ...(order.type === 'business' && {
+              items: order.items?.map(item => ({
+                name: item.product?.name || 'Product not found',
+                price: item.price,
+                quantity: item.quantity,
+                business: item.product?.business?.name || 'Business not found'
+              })) || []
+            }),
+            ...(order.type === 'errand' && { errandItems: order.errandItems }),
+            ...(order.type === 'ticket' && { ticketData: order.ticketData }),
+            ...(order.type === 'random' && { deliveryData: order.deliveryData })
+          }))
+        },
+        analytics: {
+          deliveriesThisMonth: riderOrders.filter(order => 
+            order.status === 'delivered' && 
+            order.deliveredAt && 
+            new Date(order.deliveredAt).getMonth() === currentMonth &&
+            new Date(order.deliveredAt).getFullYear() === currentYear
+          ).length,
+          deliveriesLastMonth: riderOrders.filter(order => 
+            order.status === 'delivered' && 
+            order.deliveredAt && 
+            new Date(order.deliveredAt).getMonth() === currentMonth - 1 &&
+            new Date(order.deliveredAt).getFullYear() === currentYear
+          ).length,
+          activeDays: [...new Set(riderOrders
+            .filter(order => order.deliveredAt)
+            .map(order => new Date(order.deliveredAt).toDateString())
+          )].length,
+          averageDailyDeliveries: completedCount > 0 ? 
+            Math.round((completedCount / Math.max([...new Set(riderOrders
+              .filter(order => order.deliveredAt)
+              .map(order => new Date(order.deliveredAt).toDateString())
+            )].length, 1)) * 100) / 100 : 0
+        }
+      };
+    });
+
+    // Sort riders by total earnings (descending)
+    ridersWithStats.sort((a, b) => b.financial.totalEarnings - a.financial.totalEarnings);
+
+    // Overall platform stats
+    const platformStats = {
+      totalRiders: ridersWithStats.length,
+      activeRiders: ridersWithStats.filter(r => r.account.online && r.rider.isActive).length,
+      totalCompletedDeliveries: ridersWithStats.reduce((sum, rider) => sum + rider.performance.completedOrders, 0),
+      totalPlatformEarnings: ridersWithStats.reduce((sum, rider) => sum + rider.financial.totalEarnings, 0),
+      averageCompletionRate: ridersWithStats.length > 0 ? 
+        Math.round(ridersWithStats.reduce((sum, rider) => sum + rider.performance.completionRate, 0) / ridersWithStats.length * 100) / 100 : 0,
+      topPerformer: ridersWithStats.length > 0 ? ridersWithStats[0].rider.name : 'N/A'
+    };
+
+    console.log(`📊 Platform Stats: ${platformStats.totalCompletedDeliveries} completed deliveries across ${platformStats.totalRiders} riders`);
+
+    res.json({
+      success: true,
+      data: {
+        platformStats,
+        riders: ridersWithStats,
+        summary: {
+          totalRiders: platformStats.totalRiders,
+          activeRiders: platformStats.activeRiders,
+          totalEarnings: platformStats.totalPlatformEarnings,
+          totalDeliveries: platformStats.totalCompletedDeliveries
+        }
+      },
+      message: `Retrieved complete stats for ${ridersWithStats.length} riders`
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - GET ALL RIDERS WITH STATS ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch rider statistics',
+      error: error.message
+    });
+  }
+};
+
 // Export all functions
 module.exports = {
   // Admin panel functions
@@ -961,6 +1256,7 @@ module.exports = {
   addUser,
   updateUser,
   deleteUser,
+  getAllRidersWithStats,
   
   // Existing functions
   createOrUpdateUser,

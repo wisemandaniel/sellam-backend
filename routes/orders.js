@@ -12,6 +12,7 @@ const {
   // NEW ADMIN ENDPOINTS
   getAllOrders,
   updateOrder,
+  getRiderOrders,
   deleteOrder,
   createOrderForUser
 } = require('../controllers/orderController');
@@ -44,6 +45,7 @@ router.patch('/:orderId/status', authorize('rider', 'admin'), updateOrderStatus)
 // ====================
 router.post('/admin/create', authorize('admin'), createOrderForUser); // Admin creates order for user
 router.get('/', authorize('admin'), getAllOrders); // Get all orders (admin panel)
+router.get('/rider/:riderId', authorize('admin'), getRiderOrders); 
 router.put('/:id', authorize('admin'), updateOrder); // Update order (admin panel)
 router.delete('/:id', authorize('admin'), deleteOrder); // Delete order (admin panel)
 
