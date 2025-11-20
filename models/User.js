@@ -69,6 +69,12 @@ const userSchema = new mongoose.Schema(
       totalAgents: { type: Number, default: 0 },
       lastUpdated: { type: Date, default: Date.now }
     },
+    commission: {
+      type: Number,
+      default: 0.75, // 75% default commission
+      min: 0,
+      max: 1
+    },
 
     totalDeliveries: {
       type: {
@@ -367,5 +373,7 @@ userSchema.post("save", async function (doc) {
     console.error("Error syncing account after user save:", err.message);
   }
 });
+
+
 
 module.exports = mongoose.model("User", userSchema);

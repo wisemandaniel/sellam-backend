@@ -12,7 +12,8 @@ const {
   getUsers,
   addUser,
   updateUser,
-  deleteUser
+  deleteUser,
+  getAllRidersWithStats // NEW IMPORT
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/auth');
 const { handleUploadError, upload } = require('../middleware/upload');
@@ -41,6 +42,10 @@ router.post('/', protect, authorize('admin'), upload.single('profileImage'), han
 router.put('/:id', protect, authorize('admin'), upload.single('profileImage'), handleUploadError, updateUser); // Update user (admin only)
 
 router.delete('/:id', protect, authorize('admin'), deleteUser); // Delete user (admin only)
+
+// NEW ROUTE: Get all riders with complete stats and deliveries
+router.get('/admin/riders/stats', protect, authorize('admin'), getAllRidersWithStats); // Get comprehensive rider stats
+
 router.put('/:userId/upload-profile-image', protect, upload.single('profileImage'), handleUploadError, uploadProfileImage);
 router.delete('/:userId/profile-image', protect, deleteProfileImage);
 
