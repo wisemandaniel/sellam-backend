@@ -1774,6 +1774,491 @@ const getMostCommonDeliveryAddress = async (clientId, clientPhone) => {
   return result[0]?._id || 'No address data';
 };
 
+
+// @desc    Get vendor by ID with complete details and business information
+// @route   GET /api/users/admin/vendors/:id
+// @access  Private/Admin
+const getVendorById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    console.log('🏪 ADMIN - Fetching vendor details for ID:', id);
+
+    // Validate vendor ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vendor ID format'
+      });
+    }
+
+    // Find vendor with basic info
+    const vendor = await User.findById(id)
+      .select('-password -verifiedDevices -pendingDeviceVerification')
+      .lean();
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendor not found'
+      });
+    }
+
+    // Verify it's a vendor
+    if (vendor.role !== 'vendor') {
+      return res.status(400).json({
+        success: false,
+        message: 'User is not a vendor'
+      });
+    }
+
+    console.log(`🔍 Vendor found: ${vendor.name} (${vendor.phone})`);
+
+    // Get vendor's businesses
+    const Store = require("../models/Store");
+    const businesses = await Store.find({ owner: id })
+      .select('name description category address phone email logo images isActive isVerified deliveryFee deliveryTime openingHours coordinates createdAt')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log(`🏪 Businesses found: ${businesses.length}`);
+
+    // Get products for all businesses
+    const businessIds = businesses.map(business => business._id);
+    const Product = require("../models/Product");
+    
+    const products = await Product.find({ business: { $in: businessIds } })
+      .select('name description price discount category images featuredImage inStock isActive createdAt')
+      .populate('business', 'name')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log(`📦 Products found: ${products.length}`);
+
+    // Get orders for all businesses (for analytics)
+    const Order = require("../models/Order");
+    
+    // Calculate pagination for orders
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Get orders that include products from vendor's businesses
+    const vendorOrders = await Order.aggregate([
+      {
+        $match: {
+          type: 'business',
+          status: { $in: ['delivered', 'accepted', 'picked_up'] }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'items.product',
+          foreignField: '_id',
+          as: 'productDetails'
+        }
+      },
+      { $unwind: '$productDetails' },
+      {
+        $match: {
+          'productDetails.business': { $in: businessIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id',
+          orderNumber: { $first: '$orderNumber' },
+          status: { $first: '$status' },
+          total: { $first: '$total' },
+          deliveryFee: { $first: '$deliveryFee' },
+          subtotal: { $first: '$subtotal' },
+          paymentStatus: { $first: '$paymentStatus' },
+          paymentMethod: { $first: '$paymentMethod' },
+          deliveryAddress: { $first: '$deliveryAddress' },
+          phone: { $first: '$phone' },
+          createdAt: { $first: '$createdAt' },
+          acceptedAt: { $first: '$acceptedAt' },
+          deliveredAt: { $first: '$deliveredAt' },
+          items: { $push: '$items' },
+          productDetails: { $push: '$productDetails' }
+        }
+      },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limitNum }
+    ]);
+
+    // Get total orders count for pagination
+    const totalOrders = await Order.aggregate([
+      {
+        $match: {
+          type: 'business',
+          status: { $in: ['delivered', 'accepted', 'picked_up'] }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'items.product',
+          foreignField: '_id',
+          as: 'productDetails'
+        }
+      },
+      { $unwind: '$productDetails' },
+      {
+        $match: {
+          'productDetails.business': { $in: businessIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id'
+        }
+      },
+      {
+        $count: 'total'
+      }
+    ]);
+
+    const totalOrdersCount = totalOrders[0]?.total || 0;
+
+    // Calculate vendor statistics
+    const vendorStats = await Order.aggregate([
+      {
+        $match: {
+          type: 'business',
+          status: { $in: ['delivered', 'accepted', 'picked_up', 'cancelled'] }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'items.product',
+          foreignField: '_id',
+          as: 'productDetails'
+        }
+      },
+      { $unwind: '$productDetails' },
+      {
+        $match: {
+          'productDetails.business': { $in: businessIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          orderCount: { $sum: 1 },
+          totalRevenue: { 
+            $sum: { 
+              $multiply: ['$items.price', '$items.quantity'] 
+            } 
+          },
+          totalProductsSold: { $sum: '$items.quantity' }
+        }
+      }
+    ]);
+
+    // Calculate total revenue and products sold
+    const totalRevenueResult = await Order.aggregate([
+      {
+        $match: {
+          type: 'business',
+          status: 'delivered'
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $lookup: {
+          from: 'products',
+          localField: 'items.product',
+          foreignField: '_id',
+          as: 'productDetails'
+        }
+      },
+      { $unwind: '$productDetails' },
+      {
+        $match: {
+          'productDetails.business': { $in: businessIds }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { 
+            $sum: { 
+              $multiply: ['$items.price', '$items.quantity'] 
+            } 
+          },
+          totalProductsSold: { $sum: '$items.quantity' },
+          totalOrders: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const totalRevenueData = totalRevenueResult[0] || {
+      totalRevenue: 0,
+      totalProductsSold: 0,
+      totalOrders: 0
+    };
+
+    // Format status counts
+    const statusCounts = {
+      delivered: 0,
+      accepted: 0,
+      picked_up: 0,
+      cancelled: 0,
+      total: totalOrdersCount
+    };
+
+    vendorStats.forEach(stat => {
+      if (statusCounts.hasOwnProperty(stat._id)) {
+        statusCounts[stat._id] = stat.orderCount;
+      }
+    });
+
+    // Calculate business statistics
+    const businessStats = businesses.map(business => {
+      const businessProducts = products.filter(product => 
+        product.business._id.toString() === business._id.toString()
+      );
+      
+      const businessOrders = vendorOrders.filter(order => 
+        order.productDetails.some(product => 
+          product.business.toString() === business._id.toString()
+        )
+      );
+
+      const activeProducts = businessProducts.filter(product => product.isActive).length;
+      const outOfStockProducts = businessProducts.filter(product => !product.inStock).length;
+
+      return {
+        id: business._id,
+        name: business.name,
+        category: business.category,
+        isActive: business.isActive,
+        isVerified: business.isVerified,
+        totalProducts: businessProducts.length,
+        activeProducts: activeProducts,
+        outOfStockProducts: outOfStockProducts,
+        totalOrders: businessOrders.length,
+        deliveryFee: business.deliveryFee,
+        deliveryTime: business.deliveryTime,
+        joinedDate: business.createdAt
+      };
+    });
+
+    // Format vendor data
+    const vendorData = {
+      id: vendor._id,
+      name: vendor.name,
+      phone: vendor.phone,
+      email: vendor.email || 'Not provided',
+      profileImage: vendor.profileImage || '',
+      address: vendor.address || 'Not provided',
+      role: vendor.role,
+      isActive: vendor.isActive,
+      phoneVerified: vendor.phoneVerified,
+      isProfileComplete: vendor.isProfileComplete,
+      joinedDate: vendor.createdAt,
+      lastLogin: vendor.lastLogin || vendor.createdAt,
+      businessCount: businesses.length,
+      productCount: products.length
+    };
+
+    // Format businesses with detailed information
+    const formattedBusinesses = businesses.map(business => {
+      const businessProducts = products.filter(product => 
+        product.business._id.toString() === business._id.toString()
+      );
+
+      return {
+        id: business._id,
+        name: business.name,
+        description: business.description,
+        category: business.category,
+        address: business.address,
+        phone: business.phone,
+        email: business.email,
+        logo: business.logo || '',
+        images: business.images || [],
+        isActive: business.isActive,
+        isVerified: business.isVerified,
+        deliveryFee: business.deliveryFee,
+        deliveryTime: business.deliveryTime,
+        openingHours: business.openingHours || {},
+        coordinates: business.coordinates || {},
+        createdAt: business.createdAt,
+        statistics: {
+          totalProducts: businessProducts.length,
+          activeProducts: businessProducts.filter(p => p.isActive).length,
+          outOfStockProducts: businessProducts.filter(p => !p.inStock).length,
+          averagePrice: businessProducts.length > 0 ? 
+            Math.round(businessProducts.reduce((sum, p) => sum + p.price, 0) / businessProducts.length * 100) / 100 : 0
+        }
+      };
+    });
+
+    // Format products
+    const formattedProducts = products.map(product => ({
+      id: product._id,
+      name: product.name,
+      description: product.description,
+      price: product.price,
+      discount: product.discount,
+      finalPrice: product.discount > 0 ? 
+        Math.round(product.price * (1 - product.discount / 100) * 100) / 100 : product.price,
+      category: product.category,
+      images: product.images || [],
+      featuredImage: product.featuredImage || (product.images?.[0] || ''),
+      inStock: product.inStock,
+      isActive: product.isActive,
+      business: {
+        id: product.business._id,
+        name: product.business.name
+      },
+      createdAt: product.createdAt
+    }));
+
+    // Format orders
+    const formattedOrders = vendorOrders.map(order => {
+      const vendorItems = order.items.filter((item, index) => {
+        const productDetail = order.productDetails[index];
+        return productDetail && businessIds.includes(productDetail.business.toString());
+      });
+
+      const vendorProductDetails = order.productDetails.filter(product => 
+        businessIds.includes(product.business.toString())
+      );
+
+      const vendorSubtotal = vendorItems.reduce((sum, item, index) => {
+        const productDetail = vendorProductDetails[index];
+        if (productDetail) {
+          return sum + (item.price * item.quantity);
+        }
+        return sum;
+      }, 0);
+
+      return {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        vendorSubtotal: Math.round(vendorSubtotal * 100) / 100,
+        paymentStatus: order.paymentStatus || 'unpaid',
+        paymentMethod: order.paymentMethod || 'cash',
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        createdAt: order.createdAt,
+        acceptedAt: order.acceptedAt,
+        deliveredAt: order.deliveredAt,
+        items: vendorItems.map((item, index) => {
+          const productDetail = vendorProductDetails[index];
+          return {
+            name: productDetail?.name || 'Product not found',
+            price: item.price,
+            quantity: item.quantity,
+            total: item.price * item.quantity,
+            business: businesses.find(b => b._id.toString() === productDetail?.business?.toString())?.name || 'Business not found'
+          };
+        })
+      };
+    });
+
+    // Comprehensive vendor statistics
+    const statistics = {
+      businesses: {
+        total: businesses.length,
+        active: businesses.filter(b => b.isActive).length,
+        verified: businesses.filter(b => b.isVerified).length,
+        byCategory: businesses.reduce((acc, business) => {
+          acc[business.category] = (acc[business.category] || 0) + 1;
+          return acc;
+        }, {})
+      },
+      products: {
+        total: products.length,
+        active: products.filter(p => p.isActive).length,
+        outOfStock: products.filter(p => !p.inStock).length,
+        byCategory: products.reduce((acc, product) => {
+          acc[product.category] = (acc[product.category] || 0) + 1;
+          return acc;
+        }, {})
+      },
+      orders: statusCounts,
+      financial: {
+        totalRevenue: Math.round(totalRevenueData.totalRevenue * 100) / 100,
+        totalProductsSold: totalRevenueData.totalProductsSold,
+        averageOrderValue: totalRevenueData.totalOrders > 0 ? 
+          Math.round((totalRevenueData.totalRevenue / totalRevenueData.totalOrders) * 100) / 100 : 0,
+        completionRate: totalOrdersCount > 0 ? 
+          Math.round((statusCounts.delivered / totalOrdersCount) * 10000) / 100 : 0
+      },
+      performance: {
+        totalOrders: totalOrdersCount,
+        deliveredOrders: statusCounts.delivered,
+        activeOrders: statusCounts.accepted + statusCounts.picked_up,
+        cancellationRate: totalOrdersCount > 0 ? 
+          Math.round((statusCounts.cancelled / totalOrdersCount) * 10000) / 100 : 0
+      }
+    };
+
+    console.log(`✅ ADMIN - Retrieved complete details for vendor: ${vendor.name}`);
+    console.log(`   🏪 Businesses: ${businesses.length}`);
+    console.log(`   📦 Products: ${products.length}`);
+    console.log(`   📊 Orders: ${totalOrdersCount}`);
+    console.log(`   💰 Revenue: ${statistics.financial.totalRevenue}`);
+
+    res.json({
+      success: true,
+      data: {
+        vendor: vendorData,
+        statistics: statistics,
+        businesses: {
+          data: formattedBusinesses,
+          summary: businessStats
+        },
+        products: {
+          data: formattedProducts,
+          total: products.length
+        },
+        orders: {
+          data: formattedOrders,
+          pagination: {
+            current: pageNum,
+            pages: Math.ceil(totalOrdersCount / limitNum),
+            total: totalOrdersCount,
+            hasNext: pageNum < Math.ceil(totalOrdersCount / limitNum),
+            hasPrev: pageNum > 1
+          }
+        }
+      },
+      message: `Retrieved complete details for vendor ${vendor.name}`
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - GET VENDOR BY ID ERROR:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vendor ID'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch vendor details',
+      error: error.message
+    });
+  }
+};
+
 // Export all functions
 module.exports = {
   // Admin panel functions
@@ -1783,6 +2268,7 @@ module.exports = {
   deleteUser,
   getAllRidersWithStats,
   getClientById, // ← Add this
+  getVendorById,
   
   // Existing functions
   createOrUpdateUser,
