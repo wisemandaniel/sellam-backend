@@ -1254,6 +1254,526 @@ const getAllRidersWithStats = async (req, res) => {
   }
 };
 
+
+// @desc    Get client by ID with complete details and delivery history
+// @route   GET /api/users/admin/clients/:id
+// @access  Private/Admin
+const getClientById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20, status } = req.query;
+
+    console.log('👤 ADMIN - Fetching client details for ID:', id);
+
+    // Validate client ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid client ID format'
+      });
+    }
+
+    // Find client with basic info
+    const client = await User.findById(id)
+      .select('-password -verifiedDevices -pendingDeviceVerification')
+      .lean();
+
+    if (!client) {
+      return res.status(404).json({
+        success: false,
+        message: 'Client not found'
+      });
+    }
+
+    // Verify it's a client (not rider/admin/vendor)
+    if (!['client', 'customer'].includes(client.role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'User is not a client'
+      });
+    }
+
+    console.log(`🔍 Client found: ${client.name} (${client.phone})`);
+
+    // STRATEGY 1: Find orders by user ID (primary method)
+    let orderQuery = { user: new mongoose.Types.ObjectId(id) };
+    
+    // Add status filter if provided
+    if (status && status !== 'all') {
+      if (status === 'active') {
+        orderQuery.status = { $in: ['pending', 'accepted', 'picked_up'] };
+      } else if (status === 'completed') {
+        orderQuery.status = 'delivered';
+      } else if (status === 'cancelled') {
+        orderQuery.status = 'cancelled';
+      } else {
+        orderQuery.status = status;
+      }
+    }
+
+    // Get orders by user ID
+    let orders = await Order.find(orderQuery)
+      .populate('rider', 'name phone')
+      .populate({
+        path: 'items.product',
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name phone address deliveryTime'
+        }
+      })
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance rider')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log(`📦 Orders found by user ID: ${orders.length}`);
+
+    // STRATEGY 2: If no orders found by user ID, try by phone number
+    if (orders.length === 0) {
+      console.log(`🔍 No orders found by user ID, trying phone number: ${client.phone}`);
+      
+      const phoneOrderQuery = { phone: client.phone };
+      if (status && status !== 'all') {
+        if (status === 'active') {
+          phoneOrderQuery.status = { $in: ['pending', 'accepted', 'picked_up'] };
+        } else if (status === 'completed') {
+          phoneOrderQuery.status = 'delivered';
+        } else if (status === 'cancelled') {
+          phoneOrderQuery.status = 'cancelled';
+        } else {
+          phoneOrderQuery.status = status;
+        }
+      }
+
+      orders = await Order.find(phoneOrderQuery)
+        .populate('rider', 'name phone')
+        .populate({
+          path: 'items.product',
+          select: 'name images price featuredImage business',
+          populate: {
+            path: 'business',
+            select: 'name phone address deliveryTime'
+          }
+        })
+        .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance rider user')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      console.log(`📦 Orders found by phone number: ${orders.length}`);
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Apply pagination to the final orders list
+    const paginatedOrders = orders.slice(skip, skip + limitNum);
+    const totalOrders = orders.length;
+
+    // Get comprehensive order statistics
+    const allOrders = await Order.find({ 
+      $or: [
+        { user: new mongoose.Types.ObjectId(id) },
+        { phone: client.phone }
+      ]
+    }).lean();
+
+    console.log(`📊 Total orders found (all methods): ${allOrders.length}`);
+
+    // FIXED: Get proper financial statistics using aggregation
+    const financialStats = await Order.aggregate([
+      { 
+        $match: { 
+          $or: [
+            { user: new mongoose.Types.ObjectId(id) },
+            { phone: client.phone }
+          ]
+        } 
+      },
+      {
+        $group: {
+          _id: null,
+          totalLifetimeSpent: { 
+            $sum: {
+              $cond: [{ $eq: ['$status', 'delivered'] }, '$total', 0]
+            }
+          },
+          totalCompletedOrders: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'delivered'] }, 1, 0]
+            }
+          },
+          totalPendingPayment: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$status', 'delivered'] },
+                  { $eq: ['$paymentStatus', 'unpaid'] }
+                ]}, 
+                '$total', 
+                0
+              ]
+            }
+          },
+          totalPaidAmount: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$status', 'delivered'] },
+                  { $eq: ['$paymentStatus', 'paid'] }
+                ]}, 
+                '$total', 
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    // Get order status breakdown
+    const orderStats = await Order.aggregate([
+      { 
+        $match: { 
+          $or: [
+            { user: new mongoose.Types.ObjectId(id) },
+            { phone: client.phone }
+          ]
+        } 
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Extract financial data
+    const financialData = financialStats[0] || {
+      totalLifetimeSpent: 0,
+      totalCompletedOrders: 0,
+      totalPendingPayment: 0,
+      totalPaidAmount: 0
+    };
+
+    const lifetimeSpent = financialData.totalLifetimeSpent;
+    const completedOrdersCount = financialData.totalCompletedOrders;
+    const pendingPayment = financialData.totalPendingPayment;
+    const paidAmount = financialData.totalPaidAmount;
+
+    // Calculate average order value
+    const averageOrderValue = completedOrdersCount > 0 ? 
+      Math.round((lifetimeSpent / completedOrdersCount) * 100) / 100 : 0;
+
+    // Format statistics
+    const statusCounts = {
+      pending: 0,
+      accepted: 0,
+      picked_up: 0,
+      delivered: 0,
+      cancelled: 0,
+      rejected: 0,
+      total: allOrders.length
+    };
+
+    orderStats.forEach(stat => {
+      if (statusCounts.hasOwnProperty(stat._id)) {
+        statusCounts[stat._id] = stat.count;
+      }
+    });
+
+    // Get recent activity (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const recentActivity = allOrders.filter(order => 
+      new Date(order.createdAt) >= thirtyDaysAgo
+    ).length;
+
+    // Format client data
+    const clientData = {
+      id: client._id,
+      name: client.name,
+      phone: client.phone,
+      email: client.email || 'Not provided',
+      profileImage: client.profileImage || '',
+      address: client.address || 'Not provided',
+      role: client.role,
+      isActive: client.isActive,
+      phoneVerified: client.phoneVerified,
+      isProfileComplete: client.isProfileComplete,
+      joinedDate: client.createdAt,
+      lastLogin: client.lastLogin || client.createdAt,
+      preferences: {
+        defaultDeliveryAddress: client.defaultDeliveryAddress || client.address,
+        notificationEnabled: client.notificationEnabled !== false,
+        smsNotifications: client.smsNotifications !== false
+      }
+    };
+
+    // Format orders with detailed information
+    const formattedOrders = paginatedOrders.map(order => {
+      const baseOrder = {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        type: order.type,
+        status: order.status,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+        subtotal: order.subtotal,
+        paymentStatus: order.paymentStatus || 'unpaid',
+        paymentMethod: order.paymentMethod || 'cash',
+        distance: order.distance || 0,
+        rider: order.rider ? {
+          name: order.rider.name,
+          phone: order.rider.phone
+        } : null,
+        deliveryAddress: order.deliveryAddress,
+        phone: order.phone,
+        notes: order.notes || '',
+        createdAt: order.createdAt,
+        acceptedAt: order.acceptedAt,
+        pickedUpAt: order.pickedUpAt,
+        deliveredAt: order.deliveredAt,
+        cancelledAt: order.cancelledAt,
+        rejectedAt: order.rejectedAt,
+        // Add user ID from order for debugging
+        orderUserId: order.user
+      };
+
+      // Add type-specific items
+      switch (order.type) {
+        case 'business':
+          baseOrder.items = (order.items || []).map(item => ({
+            name: item.product?.name || 'Product not found',
+            images: item.product?.images || [],
+            featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+            price: item.price,
+            quantity: item.quantity,
+            business: item.product?.business ? {
+              name: item.product.business.name || 'Business not found',
+              phone: item.product.business.phone || '',
+              address: item.product.business.address || '',
+              deliveryTime: item.product.business.deliveryTime || 'N/A'
+            } : null
+          }));
+          break;
+
+        case 'errand':
+          baseOrder.errandItems = order.errandItems;
+          break;
+
+        case 'ticket':
+          baseOrder.ticketData = order.ticketData;
+          break;
+
+        case 'random':
+          baseOrder.deliveryData = order.deliveryData;
+          break;
+      }
+
+      return baseOrder;
+    });
+
+    // Get first and last order dates
+    const sortedOrders = allOrders.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const firstOrder = sortedOrders[0] || null;
+    const lastOrder = sortedOrders[sortedOrders.length - 1] || null;
+
+    // FIXED: Comprehensive client statistics with correct financial data
+    const statistics = {
+      orders: statusCounts,
+      financial: {
+        lifetimeSpent: Math.round(lifetimeSpent * 100) / 100,
+        averageOrderValue: averageOrderValue,
+        completedOrders: completedOrdersCount,
+        pendingPayment: Math.round(pendingPayment * 100) / 100, // ACTUAL unpaid delivered orders
+        paidAmount: Math.round(paidAmount * 100) / 100, // ACTUAL paid delivered orders
+        paymentEfficiency: completedOrdersCount > 0 ? 
+          Math.round((paidAmount / lifetimeSpent) * 10000) / 100 : 0, // Percentage paid
+        preferredPaymentMethod: await getPreferredPaymentMethod(id, client.phone)
+      },
+      activity: {
+        totalOrders: allOrders.length,
+        recentActivity: recentActivity,
+        firstOrder: firstOrder?.createdAt || null,
+        lastOrder: lastOrder?.createdAt || null,
+        orderFrequency: await calculateOrderFrequency(id, client.phone)
+      },
+      preferences: {
+        favoriteOrderType: await getFavoriteOrderType(id, client.phone),
+        averageDeliveryDistance: await getAverageDeliveryDistance(id, client.phone),
+        mostCommonDeliveryAddress: await getMostCommonDeliveryAddress(id, client.phone)
+      },
+      dataSource: {
+        byUserId: await Order.countDocuments({ user: new mongoose.Types.ObjectId(id) }),
+        byPhone: await Order.countDocuments({ phone: client.phone }),
+        totalCombined: allOrders.length
+      }
+    };
+
+    console.log(`✅ ADMIN - Retrieved complete details for client: ${client.name}`);
+    console.log(`   📦 Orders: ${allOrders.length} total`);
+    console.log(`   💰 Financial: Spent ${lifetimeSpent}, Pending: ${pendingPayment}, Paid: ${paidAmount}`);
+    console.log(`   📊 Data source: ${statistics.dataSource.byUserId} by user ID, ${statistics.dataSource.byPhone} by phone`);
+
+    res.json({
+      success: true,
+      data: {
+        client: clientData,
+        statistics: statistics,
+        orders: {
+          data: formattedOrders,
+          pagination: {
+            current: pageNum,
+            pages: Math.ceil(totalOrders / limitNum),
+            total: totalOrders,
+            hasNext: pageNum < Math.ceil(totalOrders / limitNum),
+            hasPrev: pageNum > 1
+          }
+        }
+      },
+      message: `Retrieved complete details for client ${client.name} with ${allOrders.length} orders`
+    });
+
+  } catch (error) {
+    console.error('❌ ADMIN - GET CLIENT BY ID ERROR:', error);
+    
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid client ID'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch client details',
+      error: error.message
+    });
+  }
+};
+
+// Update helper functions to support both user ID and phone
+const getPreferredPaymentMethod = async (clientId, clientPhone) => {
+  const result = await Order.aggregate([
+    { 
+      $match: { 
+        $or: [
+          { user: new mongoose.Types.ObjectId(clientId) },
+          { phone: clientPhone }
+        ]
+      } 
+    },
+    {
+      $group: {
+        _id: '$paymentMethod',
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { count: -1 } },
+    { $limit: 1 }
+  ]);
+  
+  return result[0]?._id || 'cash';
+};
+
+const calculateOrderFrequency = async (clientId, clientPhone) => {
+  const orders = await Order.find({
+    $or: [
+      { user: new mongoose.Types.ObjectId(clientId) },
+      { phone: clientPhone }
+    ]
+  })
+  .sort({ createdAt: 1 })
+  .select('createdAt')
+  .lean();
+
+  if (orders.length < 2) return 'N/A';
+
+  const firstOrder = new Date(orders[0].createdAt);
+  const lastOrder = new Date(orders[orders.length - 1].createdAt);
+  const daysBetween = (lastOrder - firstOrder) / (1000 * 60 * 60 * 24);
+  const frequency = orders.length / Math.max(daysBetween, 1);
+
+  if (frequency >= 1) return 'Daily';
+  if (frequency >= 0.5) return 'Every 2 days';
+  if (frequency >= 0.14) return 'Weekly';
+  if (frequency >= 0.033) return 'Monthly';
+  return 'Occasional';
+};
+
+const getFavoriteOrderType = async (clientId, clientPhone) => {
+  const result = await Order.aggregate([
+    { 
+      $match: { 
+        $or: [
+          { user: new mongoose.Types.ObjectId(clientId) },
+          { phone: clientPhone }
+        ]
+      } 
+    },
+    {
+      $group: {
+        _id: '$type',
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { count: -1 } },
+    { $limit: 1 }
+  ]);
+  
+  return result[0]?._id || 'business';
+};
+
+const getAverageDeliveryDistance = async (clientId, clientPhone) => {
+  const result = await Order.aggregate([
+    { 
+      $match: { 
+        $or: [
+          { user: new mongoose.Types.ObjectId(clientId) },
+          { phone: clientPhone }
+        ],
+        distance: { $exists: true, $gt: 0 }
+      } 
+    },
+    {
+      $group: {
+        _id: null,
+        averageDistance: { $avg: '$distance' },
+        count: { $sum: 1 }
+      }
+    }
+  ]);
+  
+  return result[0] ? Math.round(result[0].averageDistance * 100) / 100 : 0;
+};
+
+const getMostCommonDeliveryAddress = async (clientId, clientPhone) => {
+  const result = await Order.aggregate([
+    { 
+      $match: { 
+        $or: [
+          { user: new mongoose.Types.ObjectId(clientId) },
+          { phone: clientPhone }
+        ]
+      } 
+    },
+    {
+      $group: {
+        _id: '$deliveryAddress',
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { count: -1 } },
+    { $limit: 1 }
+  ]);
+  
+  return result[0]?._id || 'No address data';
+};
+
 // Export all functions
 module.exports = {
   // Admin panel functions
@@ -1262,6 +1782,7 @@ module.exports = {
   updateUser,
   deleteUser,
   getAllRidersWithStats,
+  getClientById, // ← Add this
   
   // Existing functions
   createOrUpdateUser,
