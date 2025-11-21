@@ -321,7 +321,7 @@ const updateUser = async (req, res) => {
 
     // Handle regular field updates from req.body (JSON data)
     if (req.body && Object.keys(req.body).length > 0) {
-      const { name, email, phone, role, isActive, address, vehicleType } = req.body;
+      const { name, email, phone, role, isActive, address, vehicleType, commission } = req.body;
 
       // Build update object with only provided fields
       if (name !== undefined && name !== null && name !== '') {
@@ -356,6 +356,11 @@ const updateUser = async (req, res) => {
 
       if (vehicleType !== undefined && vehicleType !== null && vehicleType !== '') {
         updateData.vehicleType = vehicleType;
+        hasValidUpdate = true;
+      }
+
+      if (commission !== undefined && commission !== null && commission !== '') {
+        updateData.commission = commission;
         hasValidUpdate = true;
       }
     }
