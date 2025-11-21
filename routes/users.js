@@ -14,7 +14,8 @@ const {
   updateUser,
   deleteUser,
   getAllRidersWithStats,
-  getClientById // ← Add this import
+  getClientById,
+  getVendorById // ← Add this import
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/auth');
 const { handleUploadError, upload } = require('../middleware/upload');
@@ -43,7 +44,8 @@ router.delete('/:id', protect, authorize('admin'), deleteUser);
 
 // NEW ADMIN ROUTES
 router.get('/admin/riders/stats', protect, authorize('admin'), getAllRidersWithStats);
-router.get('/admin/clients/:id', protect, authorize('admin'), getClientById); // ← Add this route
+router.get('/admin/clients/:id', protect, authorize('admin'), getClientById);
+router.get('/admin/vendors/:id', protect, authorize('admin'), getVendorById); // ← Add this route
 
 router.put('/:userId/upload-profile-image', protect, upload.single('profileImage'), handleUploadError, uploadProfileImage);
 router.delete('/:userId/profile-image', protect, deleteProfileImage);
