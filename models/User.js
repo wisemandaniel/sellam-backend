@@ -20,15 +20,14 @@ const userSchema = new mongoose.Schema(
     name: { type: String, trim: true, default: "" },
     phone: {
       type: String,
-      required: [true, "Please add a phone number"],
+      required: false,
       unique: true,
       trim: true,
     },
     email: { 
       type: String, 
       trim: true, 
-      default: "", 
-      require: false,
+      required: false,
       unique: true,
       lowercase: true,
       sparse: true
