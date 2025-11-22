@@ -9,34 +9,51 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// @desc    Login user (email/password for admin frontend)
+// @desc    Login user (email/password for admin frontend) - UPDATED: Supports email or phone
 // @route   POST /api/auth/login
 // @access  Public
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, phone, password } = req.body;
 
-    console.log('🔐 LOGIN ATTEMPT:', { email });
+    console.log('🔐 LOGIN ATTEMPT:', { email, phone });
 
-    // Validation
-    if (!email || !password) {
+    // Validation - require either email or phone, and password
+    if ((!email && !phone) || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide both email and password'
+        message: 'Please provide either email or phone, and password'
       });
     }
 
-    // Check if user exists with email and has password (admin/vendor roles)
-    const user = await User.findOne({ 
-      email: email.toLowerCase().trim(),
+    // Build query based on provided identifier
+    let query = { 
       role: { $in: ['admin', 'vendor'] }
-    }).select('+password'); // Include password field
+    };
+
+    if (email) {
+      query.email = email.toLowerCase().trim();
+    } else if (phone) {
+      query.phone = phone.trim();
+    }
+
+    // Check if user exists and has password (admin/vendor roles)
+    const user = await User.findOne(query).select('+password');
 
     if (!user) {
       console.log('❌ LOGIN FAILED: User not found or invalid role');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
+      });
+    }
+
+    // Check if user has a password set
+    if (!user.password) {
+      console.log('❌ LOGIN FAILED: No password set for this account');
+      return res.status(401).json({
+        success: false,
+        message: 'Password not set for this account. Please contact administrator.'
       });
     }
 
@@ -62,16 +79,32 @@ const login = async (req, res) => {
     const userData = {
       id: user._id,
       name: user.name,
-      email: user.email,
       role: user.role,
-      phone: user.phone,
-      profileImage: user.profileImage,
       isProfileComplete: user.isProfileComplete,
       isActive: user.isActive,
       lastLogin: user.lastLogin
     };
 
-    console.log('✅ LOGIN SUCCESS:', user.email);
+    // Add email if exists
+    if (user.email) {
+      userData.email = user.email;
+    }
+
+    // Add phone if exists
+    if (user.phone) {
+      userData.phone = user.phone;
+    }
+
+    // Add profile image if exists
+    if (user.profileImage) {
+      userData.profileImage = user.profileImage;
+    }
+
+    console.log('✅ LOGIN SUCCESS:', {
+      id: user._id,
+      name: user.name,
+      identifier: email || phone
+    });
 
     res.json({
       success: true,
@@ -89,42 +122,46 @@ const login = async (req, res) => {
   }
 };
 
-// @desc    Register new user (admin/vendor)
+// @desc    Register new user (admin/vendor) - UPDATED: Requires email OR phone
 // @route   POST /api/auth/register
 // @access  Private/Admin
 const register = async (req, res) => {
   try {
-    const { name, email, password, phone, role = 'admin' } = req.body;
+    const { name, email, password, phone, role } = req.body;
 
-    console.log('👤 REGISTRATION ATTEMPT:', { name, email, role });
+    console.log('👤 REGISTRATION ATTEMPT:', { name, email, phone, role });
 
-    // Validation
-    if (!name || !email || !password || !phone) {
+    // Validation - require at least email OR phone
+    if (!name || (!email && !phone)) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide all required fields: name, email, password, phone'
+        message: 'Please provide name and at least one of email or phone'
       });
     }
 
-    if (password.length < 6) {
+    // If password is provided, validate it
+    if (password && password.length < 6) {
       return res.status(400).json({
         success: false,
         message: 'Password must be at least 6 characters long'
       });
     }
 
-    // Check if user already exists
+    // Build query to check for existing users
+    const queryConditions = [];
+    if (email) queryConditions.push({ email: email.toLowerCase().trim() });
+    if (phone) queryConditions.push({ phone: phone.trim() });
+
+    // Check if user already exists with same email or phone
     const existingUser = await User.findOne({
-      $or: [
-        { email: email.toLowerCase().trim() },
-        { phone: phone.trim() }
-      ]
+      $or: queryConditions
     });
 
     if (existingUser) {
+      const conflictField = existingUser.email === email?.toLowerCase().trim() ? 'email' : 'phone';
       return res.status(400).json({
         success: false,
-        message: 'User with this email or phone already exists'
+        message: `User with this ${conflictField} already exists`
       });
     }
 
@@ -136,49 +173,108 @@ const register = async (req, res) => {
       });
     }
 
-    // Create new user
-    const user = await User.create({
+    // Prepare user data
+    const userData = {
       name: name.trim(),
-      email: email.toLowerCase().trim(),
-      password,
-      phone: phone.trim(),
       role: role,
       isActive: true,
       phoneVerified: true,
       isProfileComplete: true
-    });
-
-    // Generate token
-    const token = user.generateAuthToken();
-
-    // User data for response
-    const userData = {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      phone: user.phone,
-      profileImage: user.profileImage,
-      isProfileComplete: user.isProfileComplete,
-      isActive: user.isActive
     };
 
-    console.log('✅ REGISTRATION SUCCESS:', user.email);
+    // Add email if provided
+    if (email) {
+      userData.email = email.toLowerCase().trim();
+    }
 
-    res.status(201).json({
-      success: true,
-      token,
-      user: userData,
-      message: 'User registered successfully'
+    // Add phone if provided
+    if (phone) {
+      userData.phone = phone.trim();
+    }
+
+    // Add password only if provided (optional for vendors without email login)
+    if (password) {
+      userData.password = password;
+    }
+
+    // Create new user
+    const user = await User.create(userData);
+
+    // Generate token (only if user has email and password for login)
+    let token = null;
+    if (user.email && user.password) {
+      token = user.generateAuthToken();
+    }
+
+    // User data for response
+    const userResponse = {
+      id: user._id,
+      name: user.name,
+      role: user.role,
+      isActive: user.isActive,
+      isProfileComplete: user.isProfileComplete,
+      phoneVerified: user.phoneVerified,
+      createdAt: user.createdAt
+    };
+
+    // Add email to response if provided
+    if (user.email) {
+      userResponse.email = user.email;
+    }
+
+    // Add phone to response if provided
+    if (user.phone) {
+      userResponse.phone = user.phone;
+    }
+
+    // Add profile image if exists
+    if (user.profileImage) {
+      userResponse.profileImage = user.profileImage;
+    }
+
+    console.log('✅ REGISTRATION SUCCESS:', {
+      id: user._id,
+      name: user.name,
+      email: user.email || 'No email',
+      phone: user.phone || 'No phone',
+      role: user.role
     });
+
+    const response = {
+      success: true,
+      user: userResponse,
+      message: 'User registered successfully'
+    };
+
+    // Only include token if user can login (has email and password)
+    if (token) {
+      response.token = token;
+      response.message += ' - Account is ready for email login';
+    } else if (user.phone && !user.email) {
+      response.message += ' - Vendor account created with phone only';
+    } else if (user.email && !password) {
+      response.message += ' - Vendor account created (set password to enable email login)';
+    }
+
+    res.status(201).json(response);
 
   } catch (error) {
     console.error('❌ REGISTRATION ERROR:', error);
     
     if (error.code === 11000) {
+      const field = error.keyPattern.email ? 'email' : 'phone';
       return res.status(400).json({
         success: false,
-        message: 'User with this email or phone already exists'
+        message: `User with this ${field} already exists`
+      });
+    }
+    
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors: errors
       });
     }
     
