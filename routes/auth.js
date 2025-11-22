@@ -6,13 +6,13 @@ const {
   changePassword,
   logout
 } = require('../controllers/authController');
-const { protect, authorize } = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
 // Public routes
 router.post('/login', login);
-router.post('/register', protect, register);
+router.post('/register', register);
 
 // Protected routes
 router.get('/me', protect, getMe);
