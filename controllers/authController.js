@@ -28,7 +28,7 @@ const login = async (req, res) => {
 
     // Build query based on provided identifier
     let query = { 
-      role: { $in: ['admin', 'vendor'] }
+      role: { $in: ['client', 'rider', 'vendor', 'admin'] }
     };
 
     if (email) {
