@@ -166,10 +166,10 @@ const register = async (req, res) => {
     }
 
     // Validate role
-    if (!['admin', 'vendor'].includes(role)) {
+    if (!['client', 'vendor', 'rider'].includes(role)) {
       return res.status(400).json({
         success: false,
-        message: 'Role must be either admin or vendor'
+        message: 'Role must be either client, rider or vendor'
       });
     }
 
