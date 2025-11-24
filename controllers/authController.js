@@ -9,7 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// @desc    Login user (email/password for admin frontend) - UPDATED: Supports email or phone
+// @desc    Login user (email/password for admin frontend) - UPDATED: Returns full user details
 // @route   POST /api/auth/login
 // @access  Public
 const login = async (req, res) => {
@@ -37,11 +37,11 @@ const login = async (req, res) => {
       query.phone = phone.trim();
     }
 
-    // Check if user exists and has password (admin/vendor roles)
+    // Check if user exists and has password
     const user = await User.findOne(query).select('+password');
 
     if (!user) {
-      console.log('❌ LOGIN FAILED: User not found or invalid role');
+      console.log('❌ LOGIN FAILED: User not found');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -75,30 +75,9 @@ const login = async (req, res) => {
     // Generate JWT token
     const token = user.generateAuthToken();
 
-    // Prepare user data for response
-    const userData = {
-      id: user._id,
-      name: user.name,
-      role: user.role,
-      isProfileComplete: user.isProfileComplete,
-      isActive: user.isActive,
-      lastLogin: user.lastLogin
-    };
-
-    // Add email if exists
-    if (user.email) {
-      userData.email = user.email;
-    }
-
-    // Add phone if exists
-    if (user.phone) {
-      userData.phone = user.phone;
-    }
-
-    // Add profile image if exists
-    if (user.profileImage) {
-      userData.profileImage = user.profileImage;
-    }
+    // Get complete user details (without password)
+    const fullUser = await User.findById(user._id)
+      .select('-password -verifiedDevices -pendingDeviceVerification');
 
     console.log('✅ LOGIN SUCCESS:', {
       id: user._id,
@@ -109,7 +88,7 @@ const login = async (req, res) => {
     res.json({
       success: true,
       token,
-      user: userData,
+      user: fullUser, // Return full user object
       message: 'Login successful'
     });
 
@@ -122,12 +101,12 @@ const login = async (req, res) => {
   }
 };
 
-// @desc    Register new user (admin/vendor) - UPDATED: Requires email OR phone
+// @desc    Register new user - UPDATED: Returns full user details
 // @route   POST /api/auth/register
 // @access  Private/Admin
 const register = async (req, res) => {
   try {
-    const { name, email, password, phone, role } = req.body;
+    const { name, email, password, phone, role, address, vehicleType } = req.body;
 
     console.log('👤 REGISTRATION ATTEMPT:', { name, email, phone, role });
 
@@ -166,10 +145,10 @@ const register = async (req, res) => {
     }
 
     // Validate role
-    if (!['client', 'vendor', 'rider'].includes(role)) {
+    if (!['client', 'vendor', 'rider', 'admin'].includes(role)) {
       return res.status(400).json({
         success: false,
-        message: 'Role must be either client, rider or vendor'
+        message: 'Role must be either client, rider, vendor or admin'
       });
     }
 
@@ -182,54 +161,24 @@ const register = async (req, res) => {
       isProfileComplete: true
     };
 
-    // Add email if provided
-    if (email) {
-      userData.email = email.toLowerCase().trim();
-    }
-
-    // Add phone if provided
-    if (phone) {
-      userData.phone = phone.trim();
-    }
-
-    // Add password only if provided (optional for vendors without email login)
-    if (password) {
-      userData.password = password;
-    }
+    // Add optional fields if provided
+    if (email) userData.email = email.toLowerCase().trim();
+    if (phone) userData.phone = phone.trim();
+    if (address) userData.address = address;
+    if (vehicleType) userData.vehicleType = vehicleType;
+    if (password) userData.password = password;
 
     // Create new user
     const user = await User.create(userData);
+
+    // Get complete user details (without password)
+    const fullUser = await User.findById(user._id)
+      .select('-password -verifiedDevices -pendingDeviceVerification');
 
     // Generate token (only if user has email and password for login)
     let token = null;
     if (user.email && user.password) {
       token = user.generateAuthToken();
-    }
-
-    // User data for response
-    const userResponse = {
-      id: user._id,
-      name: user.name,
-      role: user.role,
-      isActive: user.isActive,
-      isProfileComplete: user.isProfileComplete,
-      phoneVerified: user.phoneVerified,
-      createdAt: user.createdAt
-    };
-
-    // Add email to response if provided
-    if (user.email) {
-      userResponse.email = user.email;
-    }
-
-    // Add phone to response if provided
-    if (user.phone) {
-      userResponse.phone = user.phone;
-    }
-
-    // Add profile image if exists
-    if (user.profileImage) {
-      userResponse.profileImage = user.profileImage;
     }
 
     console.log('✅ REGISTRATION SUCCESS:', {
@@ -242,7 +191,7 @@ const register = async (req, res) => {
 
     const response = {
       success: true,
-      user: userResponse,
+      user: fullUser, // Return full user object
       message: 'User registered successfully'
     };
 
@@ -251,9 +200,9 @@ const register = async (req, res) => {
       response.token = token;
       response.message += ' - Account is ready for email login';
     } else if (user.phone && !user.email) {
-      response.message += ' - Vendor account created with phone only';
+      response.message += ' - Account created with phone only';
     } else if (user.email && !password) {
-      response.message += ' - Vendor account created (set password to enable email login)';
+      response.message += ' - Account created (set password to enable email login)';
     }
 
     res.status(201).json(response);
@@ -285,12 +234,13 @@ const register = async (req, res) => {
   }
 };
 
-// @desc    Get current user profile
+// @desc    Get current user profile - UPDATED: Returns full user details
 // @route   GET /api/auth/me
 // @access  Private
 const getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id)
+      .select('-password -verifiedDevices -pendingDeviceVerification');
 
     if (!user) {
       return res.status(404).json({
@@ -301,7 +251,7 @@ const getMe = async (req, res) => {
 
     res.json({
       success: true,
-      data: user
+      data: user // Return full user object
     });
 
   } catch (error) {
