@@ -37,10 +37,10 @@ router.get('/devices', protect, getVerifiedDevices);
 router.delete('/devices/:deviceId', protect, removeDevice);
 
 // ADMIN PANEL ROUTES
-router.get('/', protect, authorize('admin'), getUsers);
-router.post('/', protect, authorize('admin'), upload.single('profileImage'), handleUploadError, addUser);
-router.put('/:id', protect, authorize('admin'), upload.single('profileImage'), handleUploadError, updateUser);
-router.delete('/:id', protect, authorize('admin'), deleteUser);
+router.get('/', protect,  getUsers);
+router.post('/', protect,  upload.single('profileImage'), handleUploadError, addUser);
+router.put('/:id', protect,  upload.single('profileImage'), handleUploadError, updateUser);
+router.delete('/:id', protect,  deleteUser);
 
 // NEW ADMIN ROUTES
 router.get('/admin/riders/stats', protect, authorize('admin'), getAllRidersWithStats);
