@@ -38,7 +38,7 @@ router.get('/my-deliveries/active', authorize('rider', 'admin'), getMyActiveDeli
 router.get('/my-deliveries/completed', authorize('rider', 'admin'), getMyCompletedDeliveries);
 router.patch('/:orderId/accept', authorize('rider', 'admin'), acceptDelivery);
 router.patch('/:orderId/reject', authorize('rider', 'admin'), rejectDelivery);
-router.patch('/:orderId/status', authorize('rider', 'admin'), updateOrderStatus);
+router.patch('/:orderId/status', updateOrderStatus);
 
 // ====================
 // ADMIN ONLY ROUTES (for frontend admin panel)
