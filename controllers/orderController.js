@@ -2698,13 +2698,13 @@ const getOrdersByBusiness = async (req, res) => {
   }
 };
 
-// @desc    Get business order statistics (dashboard)
+// @desc    Get business order statistics (FIXED VERSION)
 // @route   GET /api/orders/business/:businessId/stats
 // @access  Private/BusinessOwner/Admin
 const getBusinessOrderStats = async (req, res) => {
   try {
     const { businessId } = req.params;
-    const { period = 'month' } = req.query; // day, week, month, year
+    const { period = 'month' } = req.query;
 
     console.log(`📊 Fetching order stats for business ${businessId} for period: ${period}`);
 
@@ -2749,114 +2749,38 @@ const getBusinessOrderStats = async (req, res) => {
         startDate.setMonth(now.getMonth() - 1);
     }
 
-    // Get detailed statistics using aggregation
-    const stats = await Order.aggregate([
-      {
-        $match: {
-          type: 'business',
-          'items.business': new mongoose.Types.ObjectId(businessId),
-          createdAt: { $gte: startDate }
-        }
-      },
-      { $unwind: '$items' },
-      {
-        $match: {
-          'items.business': new mongoose.Types.ObjectId(businessId)
-        }
-      },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-          totalRevenue: { 
-            $sum: { 
-              $cond: [
-                { $eq: ['$status', 'delivered'] },
-                { $multiply: ['$items.price', '$items.quantity'] },
-                0
-              ]
-            }
-          },
-          averageOrderValue: {
-            $avg: {
-              $multiply: ['$items.price', '$items.quantity']
-            }
-          }
-        }
+    console.log(`📅 Date range: ${startDate} to ${now}`);
+
+    // Get all business orders within date range
+    const allOrders = await Order.find({ 
+      type: 'business',
+      createdAt: { $gte: startDate }
+    })
+    .populate({
+      path: 'items.product',
+      select: 'name business',
+      populate: {
+        path: 'business',
+        select: 'name _id'
       }
-    ]);
+    })
+    .lean();
 
-    // Get daily order trends for the period
-    const dailyTrends = await Order.aggregate([
-      {
-        $match: {
-          type: 'business',
-          'items.business': new mongoose.Types.ObjectId(businessId),
-          createdAt: { $gte: startDate },
-          status: 'delivered'
-        }
-      },
-      { $unwind: '$items' },
-      {
-        $match: {
-          'items.business': new mongoose.Types.ObjectId(businessId)
-        }
-      },
-      {
-        $group: {
-          _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
-          },
-          orders: { $sum: 1 },
-          revenue: { 
-            $sum: { $multiply: ['$items.price', '$items.quantity'] } 
-          }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ]);
+    console.log(`📦 Found ${allOrders.length} total business orders in date range`);
 
-    // Get popular products
-    const popularProducts = await Order.aggregate([
-      {
-        $match: {
-          type: 'business',
-          'items.business': new mongoose.Types.ObjectId(businessId),
-          status: 'delivered',
-          createdAt: { $gte: startDate }
-        }
-      },
-      { $unwind: '$items' },
-      {
-        $match: {
-          'items.business': new mongoose.Types.ObjectId(businessId)
-        }
-      },
-      {
-        $lookup: {
-          from: 'products',
-          localField: 'items.product',
-          foreignField: '_id',
-          as: 'product'
-        }
-      },
-      { $unwind: '$product' },
-      {
-        $group: {
-          _id: '$items.product',
-          productName: { $first: '$product.name' },
-          totalSold: { $sum: '$items.quantity' },
-          totalRevenue: { 
-            $sum: { $multiply: ['$items.price', '$items.quantity'] } 
-          }
-        }
-      },
-      { $sort: { totalSold: -1 } },
-      { $limit: 10 }
-    ]);
+    // Filter orders to only include those with items from this business
+    const businessOrders = allOrders.filter(order => 
+      order.items.some(item => {
+        if (!item.product || !item.product.business) return false;
+        const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
+        return itemBusinessId === businessId;
+      })
+    );
 
-    // Format the statistics
-    const statusStats = {
+    console.log(`✅ Found ${businessOrders.length} orders for ${business.name}`);
+
+    // Calculate status breakdown
+    const statusBreakdown = {
       pending: 0,
       accepted: 0,
       picked_up: 0,
@@ -2865,13 +2789,107 @@ const getBusinessOrderStats = async (req, res) => {
     };
 
     let totalRevenue = 0;
-    let totalOrders = 0;
+    let deliveredCount = 0;
+    let cancelledCount = 0;
 
-    stats.forEach(stat => {
-      statusStats[stat._id] = stat.count;
-      totalOrders += stat.count;
-      totalRevenue += stat.totalRevenue;
+    businessOrders.forEach(order => {
+      // Count by status
+      statusBreakdown[order.status] = (statusBreakdown[order.status] || 0) + 1;
+
+      // Calculate revenue from delivered orders
+      if (order.status === 'delivered') {
+        deliveredCount++;
+        // Calculate business-specific revenue for this order
+        const businessItems = order.items.filter(item => {
+          if (!item.product || !item.product.business) return false;
+          const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
+          return itemBusinessId === businessId;
+        });
+
+        const businessRevenue = businessItems.reduce((sum, item) => 
+          sum + (item.price * item.quantity), 0
+        );
+        
+        totalRevenue += businessRevenue;
+      }
+
+      if (order.status === 'cancelled') {
+        cancelledCount++;
+      }
     });
+
+    const totalOrders = businessOrders.length;
+    const completionRate = totalOrders > 0 ? Math.round((deliveredCount / totalOrders) * 100) : 0;
+    const cancellationRate = totalOrders > 0 ? Math.round((cancelledCount / totalOrders) * 100) : 0;
+
+    // Get daily trends
+    const dailyTrends = [];
+    const dailyRevenue = {};
+
+    businessOrders.forEach(order => {
+      if (order.status === 'delivered') {
+        const dateStr = order.createdAt.toISOString().split('T')[0];
+        
+        // Calculate business-specific revenue for this order
+        const businessItems = order.items.filter(item => {
+          if (!item.product || !item.product.business) return false;
+          const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
+          return itemBusinessId === businessId;
+        });
+
+        const businessRevenue = businessItems.reduce((sum, item) => 
+          sum + (item.price * item.quantity), 0
+        );
+
+        if (!dailyRevenue[dateStr]) {
+          dailyRevenue[dateStr] = { orders: 0, revenue: 0 };
+        }
+        dailyRevenue[dateStr].orders += 1;
+        dailyRevenue[dateStr].revenue += businessRevenue;
+      }
+    });
+
+    // Convert daily revenue to array format
+    Object.keys(dailyRevenue).forEach(date => {
+      dailyTrends.push({
+        _id: date,
+        orders: dailyRevenue[date].orders,
+        revenue: dailyRevenue[date].revenue
+      });
+    });
+
+    // Sort daily trends by date
+    dailyTrends.sort((a, b) => a._id.localeCompare(b._id));
+
+    // Get popular products
+    const productSales = {};
+
+    businessOrders.forEach(order => {
+      if (order.status === 'delivered') {
+        order.items.forEach(item => {
+          if (item.product && item.product.business) {
+            const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
+            if (itemBusinessId === businessId) {
+              const productId = item.product._id.toString();
+              if (!productSales[productId]) {
+                productSales[productId] = {
+                  productName: item.product.name,
+                  totalSold: 0,
+                  totalRevenue: 0
+                };
+              }
+              productSales[productId].totalSold += item.quantity;
+              productSales[productId].totalRevenue += (item.price * item.quantity);
+            }
+          }
+        });
+      }
+    });
+
+    // Convert to array and sort by total sold
+    const popularProducts = Object.values(productSales)
+      .sort((a, b) => b.totalSold - a.totalSold)
+      .slice(0, 10);
 
     const response = {
       business: {
@@ -2884,17 +2902,23 @@ const getBusinessOrderStats = async (req, res) => {
         endDate: now
       },
       overview: {
-        totalOrders,
+        totalOrders: totalOrders,
         totalRevenue: Math.round(totalRevenue * 100) / 100,
-        completionRate: totalOrders > 0 ? Math.round((statusStats.delivered / totalOrders) * 100) : 0,
-        cancellationRate: totalOrders > 0 ? Math.round((statusStats.cancelled / totalOrders) * 100) : 0
+        completionRate: completionRate,
+        cancellationRate: cancellationRate
       },
-      statusBreakdown: statusStats,
+      statusBreakdown: statusBreakdown,
       dailyTrends: dailyTrends,
       popularProducts: popularProducts
     };
 
-    console.log(`✅ Business stats retrieved for ${business.name}`);
+    console.log(`✅ Business stats retrieved for ${business.name}:`, {
+      totalOrders,
+      totalRevenue,
+      completionRate,
+      dailyTrends: dailyTrends.length,
+      popularProducts: popularProducts.length
+    });
 
     res.json({
       success: true,
