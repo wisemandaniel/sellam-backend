@@ -54,7 +54,7 @@ router.delete('/:id', authorize('admin'), deleteOrder); // Delete order (admin p
 // ====================
 // BUSINESS OWNER ROUTES
 // ====================
-router.get('/business/:businessId', authorize('business_owner', 'admin'), getOrdersByBusiness);
-router.get('/business/:businessId/stats', authorize('business_owner', 'admin'), getBusinessOrderStats);
+router.get('/business/:businessId', authorize('vendor', 'admin'), getOrdersByBusiness);
+router.get('/business/:businessId/stats', authorize('vendor', 'admin'), getBusinessOrderStats);
 
 module.exports = router;
