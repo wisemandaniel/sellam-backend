@@ -2,6 +2,8 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
+const Business = require('../models/Business');
+const mongoose = require('mongoose');
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -101,12 +103,13 @@ const login = async (req, res) => {
   }
 };
 
-// @desc    Register new user - UPDATED: Returns full user details
+// @desc    Register new user - UPDATED: Creates business for vendors
 // @route   POST /api/auth/register
 // @access  Private/Admin
 const register = async (req, res) => {
+  let session = null;
   try {
-    const { name, email, password, phone, role, address, vehicleType } = req.body;
+    const { name, email, password, phone, role, address, vehicleType, businessData } = req.body;
 
     console.log('👤 REGISTRATION ATTEMPT:', { name, email, phone, role });
 
@@ -152,41 +155,124 @@ const register = async (req, res) => {
       });
     }
 
-    // Prepare user data
-    const userData = {
-      name: name.trim(),
-      role: role,
-      isActive: true,
-      phoneVerified: true,
-      isProfileComplete: true
-    };
+    // For vendors, validate business data
+    if (role === 'vendor') {
+      if (!businessData || !businessData.name || !businessData.address || !businessData.phone) {
+        return res.status(400).json({
+          success: false,
+          message: 'For vendor registration, please provide business name, address, and phone'
+        });
+      }
 
-    // Add optional fields if provided
-    if (email) userData.email = email.toLowerCase().trim();
-    if (phone) userData.phone = phone.trim();
-    if (address) userData.address = address;
-    if (vehicleType) userData.vehicleType = vehicleType;
-    if (password) userData.password = password;
+      // Check if business with same name or phone already exists
+      const existingBusiness = await Business.findOne({
+        $or: [
+          { name: businessData.name.trim() },
+          { phone: businessData.phone.trim() }
+        ]
+      });
 
-    // Create new user
-    const user = await User.create(userData);
+      if (existingBusiness) {
+        const conflictField = existingBusiness.name === businessData.name.trim() ? 'name' : 'phone';
+        return res.status(400).json({
+          success: false,
+          message: `Business with this ${conflictField} already exists`
+        });
+      }
+    }
 
-    // Get complete user details (without password)
-    const fullUser = await User.findById(user._id)
+    // Start MongoDB session for transaction
+    session = await mongoose.startSession();
+    session.startTransaction();
+
+    let createdUser = null;
+    let business = null;
+
+    try {
+      // Prepare user data
+      const userData = {
+        name: name.trim(),
+        role: role,
+        isActive: true,
+        phoneVerified: true,
+        isProfileComplete: true
+      };
+
+      // Add optional fields if provided
+      if (email) userData.email = email.toLowerCase().trim();
+      if (phone) userData.phone = phone.trim();
+      if (address) userData.address = address;
+      if (vehicleType) userData.vehicleType = vehicleType;
+      if (password) userData.password = password;
+
+      // Create new user within transaction
+      const user = await User.create([userData], { session });
+      createdUser = user[0];
+
+      // Create business if role is vendor
+      if (role === 'vendor') {
+        const businessInfo = {
+          name: businessData.name.trim(),
+          description: businessData.description || '',
+          address: businessData.address,
+          phone: businessData.phone.trim(),
+          email: businessData.email || email || '', // Use business email or fallback to user email
+          owner: createdUser._id,
+          isApproved: businessData.isApproved !== undefined ? businessData.isApproved : false,
+          category: businessData.category || 'restaurant',
+          deliveryTime: businessData.deliveryTime || '30-45 min',
+          deliveryFee: businessData.deliveryFee || 1000,
+          minOrderAmount: businessData.minOrderAmount || 0,
+          openingHours: businessData.openingHours || { opening: '08:00', closing: '22:00' },
+          isOpen: businessData.isOpen !== undefined ? businessData.isOpen : true,
+          location: businessData.location || { latitude: 0, longitude: 0 },
+          tags: businessData.tags || [],
+          socialMedia: businessData.socialMedia || {}
+        };
+
+        const createdBusiness = await Business.create([businessInfo], { session });
+        business = createdBusiness[0];
+
+        console.log('🏪 BUSINESS CREATED:', {
+          id: business._id,
+          name: business.name,
+          owner: createdUser._id
+        });
+      }
+
+      // Commit transaction
+      await session.commitTransaction();
+      console.log('✅ TRANSACTION COMMITTED');
+
+    } catch (transactionError) {
+      // Abort transaction if error occurs during database operations
+      await session.abortTransaction();
+      console.error('❌ TRANSACTION ABORTED:', transactionError);
+      throw transactionError;
+    } finally {
+      // Always end the session
+      if (session) {
+        session.endSession();
+      }
+    }
+
+    // Get complete user details (without password) - outside transaction
+    const fullUser = await User.findById(createdUser._id)
       .select('-password -verifiedDevices -pendingDeviceVerification');
 
     // Generate token (only if user has email and password for login)
     let token = null;
-    if (user.email && user.password) {
-      token = user.generateAuthToken();
+    if (createdUser.email && createdUser.password) {
+      token = createdUser.generateAuthToken();
     }
 
     console.log('✅ REGISTRATION SUCCESS:', {
-      id: user._id,
-      name: user.name,
-      email: user.email || 'No email',
-      phone: user.phone || 'No phone',
-      role: user.role
+      id: createdUser._id,
+      name: createdUser.name,
+      email: createdUser.email || 'No email',
+      phone: createdUser.phone || 'No phone',
+      role: createdUser.role,
+      businessCreated: role === 'vendor'
     });
 
     const response = {
@@ -195,13 +281,19 @@ const register = async (req, res) => {
       message: 'User registered successfully'
     };
 
+    // Add business data to response if vendor
+    if (role === 'vendor' && business) {
+      response.business = business;
+      response.message += ' and business created';
+    }
+
     // Only include token if user can login (has email and password)
     if (token) {
       response.token = token;
       response.message += ' - Account is ready for email login';
-    } else if (user.phone && !user.email) {
+    } else if (createdUser.phone && !createdUser.email) {
       response.message += ' - Account created with phone only';
-    } else if (user.email && !password) {
+    } else if (createdUser.email && !password) {
       response.message += ' - Account created (set password to enable email login)';
     }
 
@@ -210,11 +302,14 @@ const register = async (req, res) => {
   } catch (error) {
     console.error('❌ REGISTRATION ERROR:', error);
     
+    // Handle specific error types
     if (error.code === 11000) {
-      const field = error.keyPattern.email ? 'email' : 'phone';
+      const field = error.keyPattern?.email ? 'email' : 
+                   error.keyPattern?.phone ? 'phone' : 
+                   error.keyPattern?.name ? 'business name' : 'field';
       return res.status(400).json({
         success: false,
-        message: `User with this ${field} already exists`
+        message: `${field.charAt(0).toUpperCase() + field.slice(1)} already exists`
       });
     }
     
@@ -229,7 +324,7 @@ const register = async (req, res) => {
     
     res.status(500).json({
       success: false,
-      message: 'Error creating user account'
+      message: 'Error creating user account: ' + error.message
     });
   }
 };
