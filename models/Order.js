@@ -11,6 +11,10 @@ const orderItemSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Store",
     },
+    business: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+    },
     quantity: { type: Number, min: 1 },
     price: { type: Number, min: 0 },
   },
