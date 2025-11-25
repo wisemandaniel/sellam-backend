@@ -14,7 +14,9 @@ const {
   updateOrder,
   getRiderOrders,
   deleteOrder,
-  createOrderForUser
+  createOrderForUser,
+  getOrdersByBusiness,
+  getBusinessOrderStats
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -48,5 +50,11 @@ router.get('/', authorize('admin'), getAllOrders); // Get all orders (admin pane
 router.get('/rider/:riderId', authorize('admin'), getRiderOrders); 
 router.put('/:id', authorize('admin'), updateOrder); // Update order (admin panel)
 router.delete('/:id', authorize('admin'), deleteOrder); // Delete order (admin panel)
+
+// ====================
+// BUSINESS OWNER ROUTES
+// ====================
+router.get('/business/:businessId', authorize('business_owner', 'admin'), getOrdersByBusiness);
+router.get('/business/:businessId/stats', authorize('business_owner', 'admin'), getBusinessOrderStats);
 
 module.exports = router;
