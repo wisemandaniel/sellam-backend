@@ -476,14 +476,18 @@ const updateBusiness = async (req, res) => {
   }
 };
 
-// @desc    Delete business
+// @desc    Delete business and associated vendor
 // @route   DELETE /api/businesses/:id
 // @access  Private
 const deleteBusiness = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const business = await Business.findById(req.params.id);
+    const business = await Business.findById(req.params.id).session(session);
     
     if (!business) {
+      await session.abortTransaction();
       return res.status(404).json({ 
         success: false,
         message: 'Business not found' 
@@ -492,13 +496,39 @@ const deleteBusiness = async (req, res) => {
 
     // Check if user owns the business or is admin
     if (business.owner.toString() !== req.user.id && req.user.role !== 'admin') {
+      await session.abortTransaction();
       return res.status(403).json({
         success: false,
         message: 'Not authorized to delete this business'
       });
     }
 
-    // Delete images from Supabase
+    // Store owner ID for vendor deletion
+    const ownerId = business.owner;
+
+    // 1. Delete all products associated with this business
+    console.log(`🗑️ Deleting products for business: ${business.name}`);
+    const products = await Product.find({ business: business._id }).session(session);
+    
+    // Delete product images from Supabase
+    for (const product of products) {
+      if (product.images && product.images.length > 0) {
+        for (const imageUrl of product.images) {
+          if (imageUrl.includes('supabase.co')) {
+            await deleteProductImageFromSupabase(imageUrl);
+          }
+        }
+      }
+      if (product.featuredImage && product.featuredImage.includes('supabase.co')) {
+        await deleteProductImageFromSupabase(product.featuredImage);
+      }
+    }
+
+    // Delete products from database
+    await Product.deleteMany({ business: business._id }).session(session);
+    console.log(`✅ Deleted ${products.length} products`);
+
+    // 2. Delete business images from Supabase
     if (business.logo && business.logo.includes('supabase.co')) {
       await deleteImageFromSupabase(business.logo, 'logo');
     }
@@ -506,21 +536,146 @@ const deleteBusiness = async (req, res) => {
       await deleteImageFromSupabase(business.coverImage, 'cover');
     }
 
-    await Business.findByIdAndDelete(req.params.id);
+    // 3. Delete the business
+    await Business.findByIdAndDelete(req.params.id).session(session);
+    console.log(`✅ Business deleted: ${business.name}`);
 
-    console.log('✅ BUSINESS DELETED:', business.name);
+    // 4. Delete the vendor (user) if they don't own any other businesses
+    const userBusinesses = await Business.find({ owner: ownerId }).session(session);
+    
+    if (userBusinesses.length === 0) {
+      // User doesn't own any other businesses, check if they're a vendor
+      const User = require('../models/User'); // Import User model
+      const vendor = await User.findById(ownerId).session(session);
+      
+      if (vendor && vendor.role === 'vendor') {
+        // Delete vendor's profile image if exists
+        if (vendor.profileImage && vendor.profileImage.includes('supabase.co')) {
+          await deleteUserImageFromSupabase(vendor.profileImage);
+        }
+        
+        // Delete the vendor user
+        await User.findByIdAndDelete(ownerId).session(session);
+        console.log(`✅ Vendor deleted: ${vendor.name}`);
+      } else if (vendor && vendor.role === 'admin') {
+        console.log(`ℹ️ Admin user preserved: ${vendor.name}`);
+      } else if (vendor) {
+        console.log(`ℹ️ User ${vendor.name} has role '${vendor.role}' and was not deleted`);
+      }
+    } else {
+      console.log(`ℹ️ User still owns ${userBusinesses.length} other businesses, preserving user account`);
+    }
+
+    // 5. Update any orders that reference this business's products
+    const Order = require('../models/Order'); // Import Order model
+    const ordersWithBusinessProducts = await Order.find({
+      type: 'business',
+      'items.product': { $in: products.map(p => p._id) }
+    }).session(session);
+
+    if (ordersWithBusinessProducts.length > 0) {
+      console.log(`🔄 Updating ${ordersWithBusinessProducts.length} orders with deleted business products`);
+      
+      for (const order of ordersWithBusinessProducts) {
+        // Remove items that belong to the deleted business
+        const remainingItems = order.items.filter(item => 
+          !products.some(product => product._id.equals(item.product))
+        );
+
+        if (remainingItems.length === 0) {
+          // If no items left, cancel the order
+          await Order.findByIdAndUpdate(
+            order._id,
+            { 
+              status: 'cancelled',
+              cancelledAt: new Date(),
+              notes: order.notes ? `${order.notes} (Auto-cancelled: Business deleted)` : 'Auto-cancelled: Business deleted'
+            },
+            { session }
+          );
+          console.log(`📦 Order ${order.orderNumber} cancelled (no items remaining)`);
+        } else {
+          // Recalculate order totals with remaining items
+          const subtotal = remainingItems.reduce((sum, item) => 
+            sum + (item.price * item.quantity), 0
+          );
+          
+          // For simplicity, keep the same delivery fee or recalculate based on your logic
+          const total = subtotal + order.deliveryFee;
+
+          await Order.findByIdAndUpdate(
+            order._id,
+            { 
+              items: remainingItems,
+              subtotal: subtotal,
+              total: total
+            },
+            { session }
+          );
+          console.log(`📦 Order ${order.orderNumber} updated with ${remainingItems.length} remaining items`);
+        }
+      }
+    }
+
+    await session.commitTransaction();
+    console.log(`✅ BUSINESS DELETION COMPLETE: ${business.name}`);
 
     res.json({
       success: true,
-      message: 'Business deleted successfully'
+      message: 'Business and associated data deleted successfully'
     });
 
   } catch (error) {
+    await session.abortTransaction();
     console.error('❌ DELETE BUSINESS ERROR:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Error deleting business' 
+      message: 'Error deleting business: ' + error.message
     });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Helper function to delete product images from Supabase
+const deleteProductImageFromSupabase = async (imageUrl) => {
+  try {
+    const urlParts = imageUrl.split('/');
+    const fileName = urlParts[urlParts.length - 1];
+    const filePath = `products/${fileName}`;
+    
+    const { error } = await supabase.storage
+      .from('products')
+      .remove([filePath]);
+    
+    if (error) {
+      console.warn(`⚠️ Could not delete product image:`, error.message);
+    } else {
+      console.log(`🗑️ Deleted product image:`, filePath);
+    }
+  } catch (deleteError) {
+    console.warn(`⚠️ Error deleting product image:`, deleteError.message);
+  }
+};
+
+// Helper function to delete user profile image from Supabase
+const deleteUserImageFromSupabase = async (imageUrl) => {
+  try {
+    const urlParts = imageUrl.split('/');
+    const fileName = urlParts[urlParts.length - 1];
+    const filePath = `profiles/${fileName}`;
+    
+    const { error } = await supabase.storage
+      .from('users')
+      .remove([filePath]);
+    
+    if (error) {
+      console.warn(`⚠️ Could not delete user profile image:`, error.message);
+    } else {
+      console.log(`🗑️ Deleted user profile image:`, filePath);
+    }
+  } catch (deleteError) {
+    console.warn(`⚠️ Error deleting user profile image:`, deleteError.message);
   }
 };
 
