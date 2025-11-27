@@ -21,7 +21,7 @@ router.get('/:id', getBusiness);
 router.get('/:businessId/products', getBusinessProducts);
 
 // Protected routes
-router.get('/owner/my-businesses', protect, getMyBusinesses);
+router.get('/my-businesses', protect, getMyBusinesses);
 router.post('/', protect, upload.fields([
   { name: 'logo', maxCount: 1 },
   { name: 'coverImage', maxCount: 1 }
