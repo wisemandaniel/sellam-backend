@@ -971,7 +971,8 @@ const getMyOrders = async (req, res) => {
           select: 'name deliveryTime'
         }
       })
-      .select('paymentStatus orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt')
+      // FIX: Add paymentStatus and paymentMethod to select
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt paymentStatus paymentMethod')
       .sort({ createdAt: -1 });
 
     const formattedOrders = orders.map(order => {
@@ -982,6 +983,9 @@ const getMyOrders = async (req, res) => {
         total: order.total,
         deliveryFee: order.deliveryFee,
         subtotal: order.subtotal,
+        // FIX: Add payment fields to response
+        paymentStatus: order.paymentStatus || 'unpaid', // Default to unpaid if not set
+        paymentMethod: order.paymentMethod || 'cash',   // Default to cash if not set
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
         notes: order.notes,
@@ -1019,6 +1023,12 @@ const getMyOrders = async (req, res) => {
       }
 
       return baseOrder;
+    });
+
+    // Debug log to verify payment status is being returned
+    console.log('✅ getMyOrders - Payment status check:');
+    formattedOrders.forEach(order => {
+      console.log(`   Order ${order.orderNumber}: paymentStatus = ${order.paymentStatus}, paymentMethod = ${order.paymentMethod}`);
     });
 
     res.json({
