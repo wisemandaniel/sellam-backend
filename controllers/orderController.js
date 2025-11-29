@@ -547,7 +547,7 @@ const createOrder = async (req, res) => {
         
         // Calculate errand totals
         calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        calculatedDeliveryFee = 1000; // Base delivery fee for errands
+        calculatedDeliveryFee = calculatedSubtotal * 0.3;
         calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
         
         orderData.subtotal = calculatedSubtotal;
@@ -563,7 +563,7 @@ const createOrder = async (req, res) => {
         
         // Calculate ticket totals
         calculatedSubtotal = ticketData.price || 5000; // Default ticket price
-        calculatedDeliveryFee = 1000; // Delivery fee for ticket
+        calculatedDeliveryFee = 1500; // Delivery fee for ticket
         calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
         
         orderData.subtotal = calculatedSubtotal;
@@ -583,7 +583,7 @@ const createOrder = async (req, res) => {
         orderData.deliveryData = deliveryData;
         
         // Calculate delivery totals
-        calculatedSubtotal = deliveryData.price || 2000; // Base delivery price
+        calculatedSubtotal = deliveryData.price || 0; // Base delivery price
         calculatedDeliveryFee = 1000; // Service fee
         calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
         
@@ -971,7 +971,7 @@ const getMyOrders = async (req, res) => {
           select: 'name deliveryTime'
         }
       })
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt')
+      .select('paymentStatus orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt')
       .sort({ createdAt: -1 });
 
     const formattedOrders = orders.map(order => {
