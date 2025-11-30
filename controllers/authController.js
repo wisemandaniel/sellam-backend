@@ -11,7 +11,7 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// @desc    Login user (email/password for admin frontend) - UPDATED: Returns full user details
+// @desc    Login user (email/password for admin frontend) - UPDATED: Auto-create account for phone-only users
 // @route   POST /api/auth/login
 // @access  Public
 const login = async (req, res) => {
@@ -20,30 +20,129 @@ const login = async (req, res) => {
 
     console.log('🔐 LOGIN ATTEMPT:', { email, phone });
 
-    // Validation - require either email or phone, and password
-    if ((!email && !phone) || !password) {
+    // Validation - require either email or phone
+    if (!email && !phone) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide either email or phone, and password'
+        message: 'Please provide either email or phone'
       });
     }
 
-    // Build query based on provided identifier
-    let query = { 
-      role: { $in: ['client', 'rider', 'vendor', 'admin'] }
-    };
-
-    if (email) {
-      query.email = email.toLowerCase().trim();
-    } else if (phone) {
-      query.phone = phone.trim();
+    // Email login requires password
+    if (email && !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required for email login'
+      });
     }
 
+    // Phone-only login (auto-create account if new user)
+    if (phone && !email) {
+      return await handlePhoneLogin(phone, res);
+    }
+
+    // Email + password login (existing behavior)
+    if (email && password) {
+      return await handleEmailLogin(email, password, res);
+    }
+
+  } catch (error) {
+    console.error('❌ LOGIN ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during authentication'
+    });
+  }
+};
+
+// Handle phone-only login (auto-create account if new)
+const handlePhoneLogin = async (phone, res) => {
+  try {
+    console.log('📱 PHONE-ONLY LOGIN ATTEMPT:', { phone });
+
+    // Clean phone number
+    const cleanPhone = phone.trim();
+
+    // Check if user exists with this phone
+    let user = await User.findOne({ 
+      phone: cleanPhone,
+      role: { $in: ['client', 'rider', 'vendor', 'admin'] }
+    });
+
+    // If user doesn't exist, auto-create a new client account
+    if (!user) {
+      console.log('👤 AUTO-CREATING NEW USER FOR PHONE:', cleanPhone);
+      
+      // Generate a random name for the new user
+      const randomName = `User${Math.floor(1000 + Math.random() * 9000)}`;
+      
+      user = await User.create({
+        name: randomName,
+        phone: cleanPhone,
+        role: 'client', // Default role for auto-created users
+        isActive: true,
+        phoneVerified: true,
+        isProfileComplete: false, // Profile needs completion
+        lastLogin: new Date()
+      });
+
+      console.log('✅ AUTO-CREATED USER:', {
+        id: user._id,
+        phone: user.phone,
+        name: user.name
+      });
+    } else {
+      // Update last login for existing user
+      user.lastLogin = new Date();
+      await user.save();
+    }
+
+    // Generate JWT token
+    const token = user.generateAuthToken();
+
+    // Get complete user details (without password)
+    const fullUser = await User.findById(user._id)
+      .select('-password -verifiedDevices -pendingDeviceVerification');
+
+    console.log('✅ PHONE LOGIN SUCCESS:', {
+      id: user._id,
+      name: user.name,
+      phone: user.phone,
+      isNewUser: !user.lastLogin || user.lastLogin.getTime() === user.createdAt.getTime()
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: fullUser,
+      message: user.isProfileComplete ? 'Login successful' : 'Account created successfully. Please complete your profile.',
+      isNewUser: !user.isProfileComplete
+    });
+
+  } catch (error) {
+    console.error('❌ PHONE LOGIN ERROR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error during phone authentication: ' + error.message
+    });
+  }
+};
+
+// Handle email + password login (existing functionality)
+const handleEmailLogin = async (email, password, res) => {
+  try {
+    console.log('📧 EMAIL LOGIN ATTEMPT:', { email });
+
+    const cleanEmail = email.toLowerCase().trim();
+
     // Check if user exists and has password
-    const user = await User.findOne(query).select('+password');
+    const user = await User.findOne({ 
+      email: cleanEmail,
+      role: { $in: ['client', 'rider', 'vendor', 'admin'] }
+    }).select('+password');
 
     if (!user) {
-      console.log('❌ LOGIN FAILED: User not found');
+      console.log('❌ EMAIL LOGIN FAILED: User not found');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -52,7 +151,7 @@ const login = async (req, res) => {
 
     // Check if user has a password set
     if (!user.password) {
-      console.log('❌ LOGIN FAILED: No password set for this account');
+      console.log('❌ EMAIL LOGIN FAILED: No password set for this account');
       return res.status(401).json({
         success: false,
         message: 'Password not set for this account. Please contact administrator.'
@@ -63,7 +162,7 @@ const login = async (req, res) => {
     const isPasswordValid = await user.comparePassword(password);
     
     if (!isPasswordValid) {
-      console.log('❌ LOGIN FAILED: Invalid password');
+      console.log('❌ EMAIL LOGIN FAILED: Invalid password');
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -81,24 +180,103 @@ const login = async (req, res) => {
     const fullUser = await User.findById(user._id)
       .select('-password -verifiedDevices -pendingDeviceVerification');
 
-    console.log('✅ LOGIN SUCCESS:', {
+    console.log('✅ EMAIL LOGIN SUCCESS:', {
       id: user._id,
       name: user.name,
-      identifier: email || phone
+      email: user.email
     });
 
     res.json({
       success: true,
       token,
-      user: fullUser, // Return full user object
+      user: fullUser,
       message: 'Login successful'
     });
 
   } catch (error) {
-    console.error('❌ LOGIN ERROR:', error);
+    console.error('❌ EMAIL LOGIN ERROR:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during authentication'
+      message: 'Error during email authentication: ' + error.message
+    });
+  }
+};
+
+// @desc    Complete user profile for auto-created phone users
+// @route   PUT /api/auth/complete-profile
+// @access  Private
+const completeProfile = async (req, res) => {
+  try {
+    const { name, email, address } = req.body;
+    const userId = req.user.id;
+
+    console.log('👤 COMPLETING PROFILE FOR USER:', userId);
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Validate required fields
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name is required to complete profile'
+      });
+    }
+
+    // Check if email is being added and if it's already taken
+    if (email) {
+      const existingUser = await User.findOne({ 
+        email: email.toLowerCase().trim(),
+        _id: { $ne: user._id }
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email already exists'
+        });
+      }
+    }
+
+    // Update user profile
+    user.name = name.trim();
+    if (email) user.email = email.toLowerCase().trim();
+    if (address) user.address = address;
+    user.isProfileComplete = true;
+
+    await user.save();
+
+    console.log('✅ PROFILE COMPLETED:', {
+      id: user._id,
+      name: user.name,
+      email: user.email || 'No email',
+      phone: user.phone
+    });
+
+    res.json({
+      success: true,
+      message: 'Profile completed successfully',
+      data: user
+    });
+
+  } catch (error) {
+    console.error('❌ COMPLETE PROFILE ERROR:', error);
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email already exists'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Error completing profile: ' + error.message
     });
   }
 };
@@ -734,5 +912,8 @@ module.exports = {
   uploadProfileImage,
   deleteProfileImage,
   updateProfile,
-  logout
+  logout,
+  completeProfile,
+  handlePhoneLogin,
+  handleEmailLogin
 };
