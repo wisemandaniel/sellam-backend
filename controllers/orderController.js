@@ -1165,6 +1165,10 @@ const getPendingOrders = async (req, res) => {
 
         case 'random':
           baseOrder.deliveryData = order.deliveryData;
+          // Also include pickup address for random deliveries
+          if (order.deliveryData?.pickupAddress) {
+            baseOrder.pickupAddress = order.deliveryData.pickupAddress;
+          }
           break;
       }
 
@@ -1175,7 +1179,7 @@ const getPendingOrders = async (req, res) => {
       success: true,
       count: formattedOrders.length,
       data: formattedOrders,
-      message: `Found ${formattedOrders.length} pending orders`
+      message: `Found ${formattedOrders .length} pending orders`
     });
 
   } catch (error) {
