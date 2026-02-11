@@ -4,11 +4,19 @@ const {
   getMyOrders,
   getOrder,
   getPendingOrders,
-  getMyCompletedDeliveries, // ✅ Import new function
+  getMyCompletedDeliveries,
   acceptDelivery,
   rejectDelivery,
   getMyActiveDeliveries,
-  updateOrderStatus
+  updateOrderStatus,
+  // NEW ADMIN ENDPOINTS
+  getAllOrders,
+  updateOrder,
+  getRiderOrders,
+  deleteOrder,
+  createOrderForUser,
+  getOrdersByBusiness,
+  getBusinessOrderStats
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -29,9 +37,24 @@ router.get('/:id', getOrder); // Customers view specific order
 // ====================
 router.get('/status/pending', authorize('rider', 'admin'), getPendingOrders);
 router.get('/my-deliveries/active', authorize('rider', 'admin'), getMyActiveDeliveries);
-router.get('/my-deliveries/completed', authorize('rider', 'admin'), getMyCompletedDeliveries); // ✅ New endpoint
+router.get('/my-deliveries/completed', authorize('rider', 'admin'), getMyCompletedDeliveries);
 router.patch('/:orderId/accept', authorize('rider', 'admin'), acceptDelivery);
 router.patch('/:orderId/reject', authorize('rider', 'admin'), rejectDelivery);
-router.patch('/:orderId/status', authorize('rider', 'admin'), updateOrderStatus);
+router.patch('/:orderId/status', updateOrderStatus);
+
+// ====================
+// ADMIN ONLY ROUTES (for frontend admin panel)
+// ====================
+router.post('/admin/create', authorize('admin'), createOrderForUser); // Admin creates order for user
+router.get('/', authorize('admin'), getAllOrders); // Get all orders (admin panel)
+router.get('/rider/:riderId', authorize('admin'), getRiderOrders); 
+router.put('/:id', authorize('admin'), updateOrder); // Update order (admin panel)
+router.delete('/:id', authorize('admin'), deleteOrder); // Delete order (admin panel)
+
+// ====================
+// BUSINESS OWNER ROUTES
+// ====================
+router.get('/business/:businessId', authorize('vendor', 'admin'), getOrdersByBusiness);
+router.get('/business/:businessId/stats', authorize('vendor', 'admin'), getBusinessOrderStats);
 
 module.exports = router;

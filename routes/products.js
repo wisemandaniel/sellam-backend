@@ -1,21 +1,35 @@
 const express = require('express');
+const router = express.Router();
+const { upload, handleUploadError } = require('../middleware/upload'); 
 const {
-  getProducts,
+  getAllProducts,
   getProduct,
-  createProduct,
+  addProduct,
   updateProduct,
-  deleteProduct
+  deleteProduct,
+  addProductImages,
+  removeProductImage,
+  getProducts,
+  getVendorProducts
 } = require('../controllers/productController');
 
-const router = express.Router();
+const uploadMiddleware = [
+  upload.array('images', 10), // 'images' field, max 10 files
+  handleUploadError
+];
 
-router.route('/')
-  .get(getProducts)
-  .post(createProduct);
+router.post('/', uploadMiddleware, addProduct);
+router.put('/:id', uploadMiddleware, updateProduct);
+router.put('/:id/images', uploadMiddleware, addProductImages);
 
-router.route('/:id')
-  .get(getProduct)
-  .put(updateProduct)
-  .delete(deleteProduct);
+// Routes without file uploads
+router.get('/', getAllProducts);
+router.get('/:id', getProduct);
+router.delete('/:id', deleteProduct);
+router.delete('/:id/images', removeProductImage);
+
+// Mobile app compatibility routes
+router.get('/mobile/products', getProducts);
+router.get('/mobile/vendor/:storeId/products', getVendorProducts);
 
 module.exports = router;

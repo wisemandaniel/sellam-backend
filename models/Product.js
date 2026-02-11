@@ -15,15 +15,19 @@ const productSchema = new mongoose.Schema({
     required: [true, 'Please add a price'],
     min: 0
   },
-  image: {
+  images: [{
     type: String,
-    required: [true, 'Please add an image']
-  },
+    required: [true, 'Please add at least one image']
+  }],
   category: {
     type: String,
     required: [true, 'Please add a category']
   },
   inStock: {
+    type: Boolean,
+    default: true
+  },
+  isAvailable: {
     type: Boolean,
     default: true
   },
@@ -36,9 +40,18 @@ const productSchema = new mongoose.Schema({
   store: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Store',
+    required: false
+  },
+  business: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Business',
     required: true
   },
-  tags: [String]
+  tags: [String],
+  featuredImage: {
+    type: String,
+    default: ''
+  }
 }, {
   timestamps: true
 });
@@ -46,6 +59,20 @@ const productSchema = new mongoose.Schema({
 // Virtual for discounted price
 productSchema.virtual('discountedPrice').get(function() {
   return this.discount > 0 ? this.price * (1 - this.discount / 100) : this.price;
+});
+
+// Set featured image to first image if not set
+productSchema.pre('save', function(next) {
+  if (this.images.length > 0 && !this.featuredImage) {
+    this.featuredImage = this.images[0];
+  }
+  
+  // Set isAvailable based on inStock if isAvailable is not explicitly set
+  if (this.isModified('inStock') && !this.isModified('isAvailable')) {
+    this.isAvailable = this.inStock;
+  }
+  
+  next();
 });
 
 module.exports = mongoose.model('Product', productSchema);

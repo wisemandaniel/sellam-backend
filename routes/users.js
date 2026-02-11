@@ -6,21 +6,48 @@ const {
   updateProfile,
   sendOTP,
   resendOTP,
-  verifyOTP
+  verifyOTP,
+  getVerifiedDevices,
+  removeDevice,
+  getUsers,
+  addUser,
+  updateUser,
+  deleteUser,
+  getAllRidersWithStats,
+  getClientById,
+  getVendorById // ← Add this import
 } = require('../controllers/userController');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
+const { handleUploadError, upload } = require('../middleware/upload');
+const { uploadProfileImage, deleteProfileImage } = require('../controllers/authController');
 
 const router = express.Router();
 
 // Public routes (no authentication required)
-router.post('/profile', createOrUpdateUser); // Create/update user by phone and get token
-router.post('/login', loginUser); // Login with phone and get token
+router.post('/profile', createOrUpdateUser);
+router.post('/login', loginUser);
+router.post('/send-otp', sendOTP);
+router.post('/verify-otp', verifyOTP);
+router.post('/resend-otp', resendOTP);
 
 // Protected routes (authentication required)
-router.get('/profile', protect, getProfile); // Only GET profile requires existing auth
-router.put('/profile', protect, updateProfile); // Update profile requires authentication
-router.post('/send-otp', sendOTP); // Send OTP
-router.post('/verify-otp', verifyOTP); // Verify OTP
-router.post('/resend-otp', resendOTP); // Resend OTP
+router.get('/profile', protect, getProfile);
+router.put('/profile', protect, updateProfile);
+router.get('/devices', protect, getVerifiedDevices);
+router.delete('/devices/:deviceId', protect, removeDevice);
+
+// ADMIN PANEL ROUTES
+router.get('/', protect,  getUsers);
+router.post('/', protect,  upload.single('profileImage'), handleUploadError, addUser);
+router.put('/:id', protect,  upload.single('profileImage'), handleUploadError, updateUser);
+router.delete('/:id', protect,  deleteUser);
+
+// NEW ADMIN ROUTES
+router.get('/admin/riders/stats', protect, authorize('admin'), getAllRidersWithStats);
+router.get('/admin/clients/:id', protect, authorize('admin'), getClientById);
+router.get('/admin/vendors/:id', protect, authorize('admin'), getVendorById); // ← Add this route
+
+router.put('/:userId/upload-profile-image', protect, upload.single('profileImage'), handleUploadError, uploadProfileImage);
+router.delete('/:userId/profile-image', protect, deleteProfileImage);
 
 module.exports = router;
