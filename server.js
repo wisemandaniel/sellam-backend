@@ -73,6 +73,9 @@ app.use('/api/businesses', require('./routes/businesses'));
 app.use('/api/riders', require('./routes/riders'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 
+app.use('/api/payment', require('./routes/payment'));
+app.use('/api/transaction', require('./routes/transaction'));
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
