@@ -1,14 +1,9 @@
 const Payment = require('../models/payment');
-const Order = require('../models/Order');
 const Transaction = require('../models/transaction');
-const User = require('../models/User');
-const Account = require('../models/Account');
 const axios = require('axios');
-const crypto = require('crypto');
 
 // ==================== CONFIGURATION & VALIDATION ====================
 
-// Verify Fapshi configuration on startup
 const verifyFapshiConfig = () => {
     const required = [
         'FAPSHI_URL',
@@ -25,12 +20,10 @@ const verifyFapshiConfig = () => {
         console.log(`   API URL: ${process.env.FAPSHI_URL}`);
     }
 };
-
 verifyFapshiConfig();
 
 // ==================== HELPER FUNCTIONS ====================
 
-// Get user ID from request safely
 const getUserId = (req) => {
     if (req.user && req.user.userId) return req.user.userId;
     if (req.user && req.user._id) return req.user._id;
@@ -38,13 +31,11 @@ const getUserId = (req) => {
     return null;
 };
 
-// Normalize phone number (last 9 digits)
 const normalizePhoneNumber = (phone) => {
     if (!phone) return '';
     return phone.replace(/\D/g, '').slice(-9);
 };
 
-// Validate Cameroonian phone number
 const isValidCameroonPhone = (phone) => {
     const normalized = normalizePhoneNumber(phone);
     return normalized.length === 9 && /^[6][5-9][0-9]{7}$/.test(normalized);
@@ -52,9 +43,6 @@ const isValidCameroonPhone = (phone) => {
 
 // ==================== FAPSHI API FUNCTIONS ====================
 
-/**
- * Initiate Fapshi payment (collection)
- */
 const initiateFapshiPayment = async (amount, from, message) => {
     try {
         const url = `${process.env.FAPSHI_URL}/direct-pay`;
@@ -95,9 +83,6 @@ const initiateFapshiPayment = async (amount, from, message) => {
     }
 };
 
-/**
- * Get Fapshi transaction status
- */
 const getFapshiTransactionStatus = async (trans_id) => {
     if (!trans_id) {
         console.error('❌ getFapshiTransactionStatus: No transaction ID provided');
@@ -137,42 +122,26 @@ const getFapshiTransactionStatus = async (trans_id) => {
 // ==================== PAYMENT CONTROLLERS ====================
 
 /**
- * Create a new payment
+ * Create a new payment – initiates transaction with Fapshi and stores PENDING status.
  */
 exports.createPayment = async (req, res) => {
     const userId = getUserId(req);
     if (!userId) {
-        return res.status(401).json({
-            success: false,
-            error: 'User not authenticated'
-        });
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
     }
-
-    console.log('💰 Creating payment for user:', userId);
 
     try {
         const { amount, from } = req.body;
 
         // Validate input
         if (!amount || !from) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing required fields: amount and from are required'
-            });
+            return res.status(400).json({ success: false, error: 'Missing required fields' });
         }
-
         if (amount <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Amount must be greater than 0'
-            });
+            return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
         }
-
         if (!isValidCameroonPhone(from)) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid phone number format. Please provide a valid Cameroonian phone number (6XXXXXXXX)'
-            });
+            return res.status(400).json({ success: false, error: 'Invalid phone number' });
         }
 
         const normalizedFrom = normalizePhoneNumber(from);
@@ -186,7 +155,6 @@ exports.createPayment = async (req, res) => {
                 `Payment from user ${userId}`
             );
         } catch (error) {
-            // Handle specific Fapshi errors
             if (error.response?.data?.message?.includes('amount below minimum')) {
                 return res.status(400).json({
                     success: false,
@@ -194,7 +162,6 @@ exports.createPayment = async (req, res) => {
                     details: error.response.data.message
                 });
             }
-
             return res.status(400).json({
                 success: false,
                 error: 'Payment initiation failed',
@@ -202,12 +169,8 @@ exports.createPayment = async (req, res) => {
             });
         }
 
-        // Validate response and extract transaction ID
         if (!fapshiResponse?.data) {
-            return res.status(500).json({
-                success: false,
-                error: 'Invalid response from payment provider'
-            });
+            return res.status(500).json({ success: false, error: 'Invalid response from payment provider' });
         }
 
         const transactionId = fapshiResponse.data.transId ||
@@ -217,29 +180,22 @@ exports.createPayment = async (req, res) => {
 
         if (!transactionId) {
             console.error('❌ No transaction ID in Fapshi response:', fapshiResponse.data);
-            return res.status(500).json({
-                success: false,
-                error: 'No transaction ID received from payment provider',
-                details: fapshiResponse.data
-            });
+            return res.status(500).json({ success: false, error: 'No transaction ID received' });
         }
 
-        console.log('✅ Transaction ID received:', transactionId);
-
-        // Create payment record with your schema
+        // Create Payment record
         const payment = new Payment({
             user: userId,
             amount,
             from: normalizedFrom,
             currency: 'XAF',
             status: 'PENDING',
-            transactionId: transactionId
+            transactionId
         });
 
         const savedPayment = await payment.save();
-        console.log('✅ Payment saved:', savedPayment._id);
 
-        // Create transaction record if Transaction model exists
+        // Create Transaction record
         if (Transaction) {
             try {
                 const transaction = new Transaction({
@@ -249,23 +205,28 @@ exports.createPayment = async (req, res) => {
                     amount,
                     currency: 'XAF',
                     status: 'PENDING',
-                    transactionId: transactionId
+                    transactionId
                 });
                 await transaction.save();
-                console.log('✅ Transaction saved:', transaction._id);
             } catch (transError) {
                 console.error('⚠️ Failed to create transaction record:', transError.message);
-                // Continue even if transaction creation fails
+                // Continue – payment is already saved
             }
         }
 
-        // Asynchronously check status
+        // Asynchronously check initial status (non-blocking)
         setImmediate(async () => {
             try {
                 const statusData = await getFapshiTransactionStatus(transactionId);
-                if (statusData?.status) {
+                if (statusData?.status && statusData.status !== 'PENDING') {
                     savedPayment.status = statusData.status;
                     await savedPayment.save();
+
+                    const transaction = await Transaction.findOne({ transactionId });
+                    if (transaction) {
+                        transaction.status = statusData.status;
+                        await transaction.save();
+                    }
                     console.log(`✅ Payment ${savedPayment._id} status updated to ${statusData.status}`);
                 }
             } catch (err) {
@@ -276,99 +237,82 @@ exports.createPayment = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: 'Payment initiated successfully',
-            transactionId: transactionId,
+            transactionId,
             paymentId: savedPayment._id,
             status: 'PENDING'
         });
 
     } catch (error) {
         console.error('❌ Payment creation failed:', error);
-        return res.status(500).json({
-            success: false,
-            error: 'Internal server error',
-            message: error.message
-        });
+        return res.status(500).json({ success: false, error: 'Internal server error' });
     }
 };
 
 /**
- * Fapshi Webhook Endpoint
+ * Fapshi Webhook Endpoint – receives final status and updates local records.
  */
 exports.fapshiWebhook = async (req, res) => {
     try {
-        // Log webhook received
-        console.log('🔔 Fapshi Webhook Received:', {
-            body: req.body,
-            timestamp: new Date().toISOString()
-        });
+        console.log('🔔 Fapshi Webhook Received:', { body: req.body, timestamp: new Date().toISOString() });
 
-        const { status, transId, amount } = req.body;
-
-        // Handle different payload formats
+        const { status, transId } = req.body;
         const transactionId = transId || req.body.reference || req.body.transactionId;
         const transactionStatus = status || req.body.event;
 
         if (!transactionId || !transactionStatus) {
             console.error('❌ Invalid webhook payload:', req.body);
-            return res.status(400).json({
-                error: 'Invalid webhook payload',
-                details: 'Missing transaction ID or status'
-            });
+            return res.status(400).json({ error: 'Invalid payload' });
         }
 
         console.log(`🔄 Processing webhook for transaction: ${transactionId}, status: ${transactionStatus}`);
 
-        // Find payment record
+        // Find payment
         const payment = await Payment.findOne({ transactionId });
         if (!payment) {
             console.log(`⚠️ Payment not found for transaction: ${transactionId}`);
-            return res.status(404).json({
-                error: 'Payment record not found',
-                transactionId
-            });
+            return res.status(404).json({ error: 'Payment record not found' });
+        }
+
+        // Map Fapshi status to internal enum
+        let newStatus;
+        if (transactionStatus === 'SUCCESSFUL' || transactionStatus === 'SUCCESS') {
+            newStatus = 'SUCCESSFUL';
+        } else if (transactionStatus === 'FAILED') {
+            newStatus = 'FAILED';
+        } else if (transactionStatus === 'EXPIRED') {
+            newStatus = 'EXPIRED';
+        } else {
+            newStatus = 'PENDING';
         }
 
         // Update payment status
         const oldStatus = payment.status;
-        payment.status = transactionStatus === 'SUCCESSFUL' ? 'SUCCESSFUL' : 
-                       transactionStatus === 'FAILED' ? 'FAILED' : 'PENDING';
-        
+        payment.status = newStatus;
         await payment.save();
-        console.log(`✅ Payment ${payment._id} status updated from ${oldStatus} to ${payment.status}`);
+        console.log(`✅ Payment ${payment._id} status updated from ${oldStatus} to ${newStatus}`);
 
         // Update transaction record if exists
         if (Transaction) {
-            try {
-                const transaction = await Transaction.findOne({ transactionId });
-                if (transaction) {
-                    transaction.status = payment.status;
-                    await transaction.save();
-                    console.log(`✅ Transaction ${transaction._id} status updated to ${payment.status}`);
-                }
-            } catch (transError) {
-                console.error('⚠️ Failed to update transaction:', transError.message);
+            const transaction = await Transaction.findOne({ transactionId });
+            if (transaction) {
+                transaction.status = newStatus;
+                await transaction.save();
+                console.log(`✅ Transaction ${transaction._id} status updated to ${newStatus}`);
             }
         }
 
-        // Handle successful payment
-        if (transactionStatus === 'SUCCESSFUL') {
-            console.log(`💰 Processing successful payment for transaction: ${transactionId}`);
+        // ✅ ONLY status update – no business logic (orders, accounts, referrals)
 
-            // Handle order payment if this is for an order
-            // You can extend this based on your business logic
-        }
-
-        // Always acknowledge webhook receipt
         return res.status(200).json({
             success: true,
             message: 'Webhook processed successfully',
             transactionId,
-            status: payment.status
+            status: newStatus
         });
 
     } catch (error) {
         console.error('❌ Error processing Fapshi webhook:', error);
-        // Always return 200 to acknowledge receipt
+        // Always return 200 to acknowledge receipt and prevent retries
         return res.status(200).json({
             success: false,
             message: 'Webhook received but processing failed',
@@ -378,45 +322,32 @@ exports.fapshiWebhook = async (req, res) => {
 };
 
 /**
- * Get transaction status
+ * Get transaction status – fetches latest status from Fapshi and updates local records if changed.
  */
 exports.getTransactionStatus = async (req, res) => {
     const userId = getUserId(req);
     if (!userId) {
-        return res.status(401).json({
-            success: false,
-            error: 'User not authenticated'
-        });
+        return res.status(401).json({ success: false, error: 'User not authenticated' });
     }
 
     try {
         const { transactionId } = req.params;
-
         if (!transactionId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Transaction ID is required'
-            });
+            return res.status(400).json({ success: false, message: 'Transaction ID is required' });
         }
 
         // Find local payment
         const payment = await Payment.findOne({ transactionId });
         if (!payment) {
-            return res.status(404).json({
-                success: false,
-                message: 'Transaction not found'
-            });
+            return res.status(404).json({ success: false, message: 'Transaction not found' });
         }
 
-        // Check authorization - only the user who created the payment can view it
+        // Authorization – only the owner can view
         if (payment.user.toString() !== userId.toString()) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized to view this transaction'
-            });
+            return res.status(403).json({ success: false, message: 'Not authorized to view this transaction' });
         }
 
-        // Get fresh status from provider
+        // Fetch fresh status from Fapshi
         let providerStatus = null;
         try {
             providerStatus = await getFapshiTransactionStatus(transactionId);
@@ -424,7 +355,27 @@ exports.getTransactionStatus = async (req, res) => {
             console.error('⚠️ Failed to get provider status:', error.message);
         }
 
-        res.status(200).json({
+        // If provider returned a final status and local is still PENDING, update it
+        if (providerStatus?.status && providerStatus.status !== 'PENDING' && payment.status === 'PENDING') {
+            let newStatus;
+            if (providerStatus.status === 'SUCCESSFUL') newStatus = 'SUCCESSFUL';
+            else if (providerStatus.status === 'FAILED') newStatus = 'FAILED';
+            else if (providerStatus.status === 'EXPIRED') newStatus = 'EXPIRED';
+            else newStatus = 'PENDING';
+
+            payment.status = newStatus;
+            await payment.save();
+
+            const transaction = await Transaction.findOne({ transactionId });
+            if (transaction) {
+                transaction.status = newStatus;
+                await transaction.save();
+            }
+
+            console.log(`✅ Payment ${payment._id} status updated to ${newStatus} via status check`);
+        }
+
+        return res.status(200).json({
             success: true,
             transactionId,
             localStatus: payment.status,
@@ -438,11 +389,7 @@ exports.getTransactionStatus = async (req, res) => {
 
     } catch (error) {
         console.error(`❌ Error fetching transaction status: ${error.message}`);
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        return res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
 
@@ -450,12 +397,8 @@ exports.getTransactionStatus = async (req, res) => {
  * Test Fapshi configuration (admin only)
  */
 exports.testFapshiConfig = async (req, res) => {
-    // Check if user is admin
     if (req.user?.role !== 'admin') {
-        return res.status(403).json({
-            success: false,
-            message: 'Admin access required'
-        });
+        return res.status(403).json({ success: false, message: 'Admin access required' });
     }
 
     const results = {
@@ -469,7 +412,7 @@ exports.testFapshiConfig = async (req, res) => {
         tests: {}
     };
 
-    // Test 1: Base URL reachable
+    // Test base URL
     try {
         const baseResponse = await axios.get(process.env.FAPSHI_URL, {
             timeout: 5000,
@@ -482,20 +425,12 @@ exports.testFapshiConfig = async (req, res) => {
             contentType: baseResponse.headers['content-type']
         };
     } catch (error) {
-        results.tests.baseUrl = {
-            error: error.message,
-            code: error.code
-        };
+        results.tests.baseUrl = { error: error.message, code: error.code };
     }
 
-    // Test 2: Payment endpoint with test data
+    // Test payment endpoint
     try {
-        const testPayment = await initiateFapshiPayment(
-            100,
-            "671234567",
-            "API Test - Please Ignore"
-        );
-        
+        const testPayment = await initiateFapshiPayment(100, "671234567", "API Test - Please Ignore");
         results.tests.payment = {
             success: true,
             status: testPayment.status,
@@ -509,9 +444,5 @@ exports.testFapshiConfig = async (req, res) => {
         };
     }
 
-    res.status(200).json({
-        success: true,
-        message: 'Fapshi configuration test completed',
-        results
-    });
+    res.status(200).json({ success: true, message: 'Fapshi configuration test completed', results });
 };
