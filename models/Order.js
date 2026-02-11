@@ -99,7 +99,7 @@ const orderSchema = new mongoose.Schema(
     paymentMethod: {
       type: String,
       enum: ["cash", "momo", 'np'],
-      default: "cash",
+      default: "np",
     },
     
     // Delivery information
