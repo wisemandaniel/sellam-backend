@@ -3,6 +3,8 @@ const {
   createOrder,
   getMyOrders,
   getOrder,
+  cancelOrder,
+  deleteMyOrder,
   getPendingOrders,
   getMyCompletedDeliveries,
   acceptDelivery,
@@ -31,6 +33,8 @@ router.use(protect);
 router.post('/', createOrder); // Customers create orders
 router.get('/my-orders', getMyOrders); // Customers view their orders
 router.get('/:id', getOrder); // Customers view specific order
+router.patch('/:orderId/cancel', cancelOrder);          // Cancel own order
+router.delete('/:id', deleteMyOrder);                   // Delete own order (only if cancelled/pending)
 
 // ====================
 // RIDER/ADMIN ROUTES

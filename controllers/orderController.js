@@ -698,6 +698,127 @@ const createOrder = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Cancel an order (customer only)
+ * @route   PATCH /api/orders/:orderId/cancel
+ * @access  Private (order owner)
+ */
+const cancelOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderId } = req.params;
+    const userId = req.user._id;
+
+    // Find the order and ensure it belongs to the authenticated user
+    const order = await Order.findOne({
+      _id: orderId,
+      user: userId,
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found or you are not authorized',
+      });
+    }
+
+    // Only allow cancellation if order is still pending
+    if (order.status !== 'pending') {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel order in "${order.status}" status. Only pending orders can be cancelled.`,
+      });
+    }
+
+    // Update order status to cancelled
+    order.status = 'cancelled';
+    order.cancelledAt = new Date();
+    await order.save({ session });
+
+    await session.commitTransaction();
+
+    res.json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        cancelledAt: order.cancelledAt,
+      },
+      message: 'Order cancelled successfully',
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('❌ Cancel order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel order',
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * @desc    Delete an order (customer only)
+ * @route   DELETE /api/orders/:id
+ * @access  Private (order owner)
+ */
+const deleteMyOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    // Find order and ensure it belongs to the user
+    const order = await Order.findOne({
+      _id: id,
+      user: userId,
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found or you are not authorized',
+      });
+    }
+
+    // Only allow deletion if order is cancelled or still pending
+    if (!['cancelled', 'pending'].includes(order.status)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete order in "${order.status}" status. Only cancelled or pending orders can be deleted.`,
+      });
+    }
+
+    await Order.deleteOne({ _id: order._id }).session(session);
+    await session.commitTransaction();
+
+    res.json({
+      success: true,
+      message: 'Order deleted successfully',
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('❌ Delete order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete order',
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
 // @desc    Create order for user (admin only)
 // @route   POST /api/orders/admin/create
 // @access  Private/Admin
@@ -2962,6 +3083,8 @@ module.exports = {
   createOrder,
   getMyOrders,
   getOrder,
+  cancelOrder,
+  deleteMyOrder,
   getPendingOrders,
   getMyCompletedDeliveries,
   acceptDelivery,
