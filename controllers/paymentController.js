@@ -1,6 +1,6 @@
 const Payment = require('../models/payment');
 const Order = require('../models/Order');
-const Transaction = require('../models/pransaction');
+const Transaction = require('../models/transaction');
 const axios = require('axios');
 
 // ==================== CONFIGURATION & VALIDATION ====================
