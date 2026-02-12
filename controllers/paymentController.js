@@ -1,5 +1,5 @@
 const Payment = require('../models/payment');
-const Order = require('../models/Order'); // ✅ Added to update order
+const Order = require('../models/Order');
 const Transaction = require('../models/transaction');
 const axios = require('axios');
 
@@ -124,7 +124,7 @@ const getFapshiTransactionStatus = async trans_id => {
 
 /**
  * Create a new payment – initiates transaction with Fapshi and stores PENDING status.
- * ✅ Now accepts `orderId` and links the payment to the order.
+ * ✅ Now accepts `orderNumber` instead of MongoDB `_id`.
  */
 exports.createPayment = async (req, res) => {
   const userId = getUserId(req);
@@ -133,11 +133,14 @@ exports.createPayment = async (req, res) => {
   }
 
   try {
-    const { amount, from, orderId } = req.body; // ✅ orderId added
+    const { amount, from, orderNumber } = req.body; // ✅ orderNumber (string)
 
     // Validate input
-    if (!amount || !from || !orderId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: amount, from, orderId' });
+    if (!amount || !from || !orderNumber) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: amount, from, orderNumber',
+      });
     }
     if (amount <= 0) {
       return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
@@ -146,10 +149,13 @@ exports.createPayment = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid phone number' });
     }
 
-    // ✅ Verify order exists and belongs to the user
-    const order = await Order.findOne({ _id: orderId, user: userId });
+    // ✅ Find order by orderNumber and verify ownership
+    const order = await Order.findOne({ orderNumber, user: userId });
     if (!order) {
-      return res.status(404).json({ success: false, error: 'Order not found or not authorized' });
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found or not authorized',
+      });
     }
 
     const normalizedFrom = normalizePhoneNumber(from);
@@ -192,10 +198,10 @@ exports.createPayment = async (req, res) => {
       return res.status(500).json({ success: false, error: 'No transaction ID received' });
     }
 
-    // ✅ Create Payment record WITH order reference
+    // ✅ Create Payment record with order ObjectId (from the found order)
     const payment = new Payment({
       user: userId,
-      order: orderId, // ✅ link to order
+      order: order._id, // store MongoDB _id for relational integrity
       amount,
       from: normalizedFrom,
       currency: 'XAF',
@@ -238,7 +244,7 @@ exports.createPayment = async (req, res) => {
             if (linkedOrder) {
               linkedOrder.paymentStatus = 'paid';
               linkedOrder.paymentMethod = 'momo';
-              linkedOrder.status = 'confirmed'; // ✅ as requested
+              linkedOrder.status = 'confirmed';
               await linkedOrder.save();
               console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
             }
@@ -319,7 +325,7 @@ exports.fapshiWebhook = async (req, res) => {
       if (order) {
         order.paymentStatus = 'paid';
         order.paymentMethod = 'momo';
-        order.status = 'confirmed'; // ✅ set to confirmed
+        order.status = 'confirmed';
         await order.save();
         console.log(`✅ Order ${order.orderNumber} marked as paid and confirmed via webhook`);
       }
