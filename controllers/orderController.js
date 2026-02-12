@@ -703,17 +703,22 @@ const createOrder = async (req, res) => {
  * @route   PATCH /api/orders/:orderId/cancel
  * @access  Private (order owner)
  */
+/**
+ * @desc    Cancel an order (customer only) - using orderNumber
+ * @route   PATCH /api/orders/order-number/:orderNumber/cancel
+ * @access  Private (order owner)
+ */
 const cancelOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { orderId } = req.params;
+    const { orderNumber } = req.params;
     const userId = req.user._id;
 
-    // Find the order and ensure it belongs to the authenticated user
+    // Find the order by orderNumber and ensure it belongs to the authenticated user
     const order = await Order.findOne({
-      _id: orderId,
+      orderNumber: orderNumber,
       user: userId,
     }).session(session);
 
@@ -764,8 +769,8 @@ const cancelOrder = async (req, res) => {
 };
 
 /**
- * @desc    Delete an order (customer only)
- * @route   DELETE /api/orders/:id
+ * @desc    Delete an order (customer only) - using orderNumber
+ * @route   DELETE /api/orders/order-number/:orderNumber
  * @access  Private (order owner)
  */
 const deleteMyOrder = async (req, res) => {
@@ -773,12 +778,12 @@ const deleteMyOrder = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { id } = req.params;
+    const { orderNumber } = req.params;
     const userId = req.user._id;
 
-    // Find order and ensure it belongs to the user
+    // Find order by orderNumber and ensure it belongs to the user
     const order = await Order.findOne({
-      _id: id,
+      orderNumber: orderNumber,
       user: userId,
     }).session(session);
 
