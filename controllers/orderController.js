@@ -781,6 +781,9 @@ const deleteMyOrder = async (req, res) => {
     const { orderNumber } = req.params;
     const userId = req.user._id;
 
+    console.log('orderNumber:::', orderNumber);
+    
+
     // Find order by orderNumber and ensure it belongs to the user
     const order = await Order.findOne({
       orderNumber: orderNumber,
