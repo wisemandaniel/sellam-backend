@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
 const paymentSchema = new Schema({
-    order: { type: Schema.Types.ObjectId, ref: 'Order', required: false },
+    order: { type: Schema.Types.ObjectId, ref: 'Order', required: true },
     accountId: { type: Schema.Types.ObjectId, ref: 'Account', required: false },
     user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     amount: { type: Number, required: true },
