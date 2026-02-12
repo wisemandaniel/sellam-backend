@@ -3087,6 +3087,80 @@ const getBusinessOrderStats = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Confirm an order after successful payment
+ * @route   PATCH /api/orders/order-number/:orderNumber/confirm
+ * @access  Private (order owner)
+ */
+const confirmOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderNumber } = req.params;
+    const userId = req.user._id;
+
+    const order = await Order.findOne({
+      orderNumber,
+      user: userId,
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found or not authorized',
+      });
+    }
+
+    // Prevent re‑confirming an already confirmed order
+    if (order.status === 'confirmed') {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Order is already confirmed',
+      });
+    }
+
+    // Only allow confirmation for orders that are still pending
+    if (order.status !== 'pending') {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot confirm order with status "${order.status}"`,
+      });
+    }
+
+    order.status = 'confirmed';
+    order.paymentStatus = 'paid';
+    order.paymentMethod = 'momo';
+    await order.save({ session });
+
+    await session.commitTransaction();
+
+    res.json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        paymentMethod: order.paymentMethod,
+      },
+      message: 'Order confirmed successfully',
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('❌ Confirm order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to confirm order',
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
 module.exports = {
   createOrder,
   getMyOrders,
@@ -3107,5 +3181,6 @@ module.exports = {
   getRiderOrders,
   // NEW BUSINESS FUNCTIONS
   getOrdersByBusiness,
-  getBusinessOrderStats
+  getBusinessOrderStats,
+  confirmOrder
 };
