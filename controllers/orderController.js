@@ -482,20 +482,16 @@ const createOrder = async (req, res) => {
 
   try {
     const { 
-      type = 'business', // Default to business for backward compatibility
+      type = 'business',
       items, 
       deliveryAddress, 
       phone, 
       notes,
-      // Errand specific
       errandItems,
-      // Ticket specific
       busAgency, seatNumber, idCard, departureTime, destination, ticketPrice,
-      // Random delivery specific
       pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
     } = req.body;
 
-    // 🔍 LOG THE ENTIRE REQUEST BODY
     console.log('📥 Incoming createOrder request body:', JSON.stringify(req.body, null, 2));
 
     if (!req.user) {
@@ -506,7 +502,6 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // Validate required fields
     if (!['business', 'errand', 'ticket', 'random'].includes(type)) {
       await session.abortTransaction();
       return res.status(400).json({
@@ -536,7 +531,6 @@ const createOrder = async (req, res) => {
     let calculatedSubtotal = 0;
     let calculatedDeliveryFee = 0;
 
-    // Process based on order type
     switch (type) {
       case 'business':
         const businessResult = await validateBusinessOrder(items);
@@ -550,12 +544,9 @@ const createOrder = async (req, res) => {
       case 'errand':
         const validatedErrandItems = validateErrandItems(errandItems);
         orderData.errandItems = validatedErrandItems;
-        
-        // Calculate errand totals
         calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
         calculatedDeliveryFee = calculatedSubtotal * 0.3;
         calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        
         orderData.subtotal = calculatedSubtotal;
         orderData.deliveryFee = calculatedDeliveryFee;
         orderData.total = calculatedTotal;
@@ -566,12 +557,9 @@ const createOrder = async (req, res) => {
           busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
         });
         orderData.ticketData = ticketData;
-        
-        // Calculate ticket totals
-        calculatedSubtotal = ticketData.price || 5000; // Default ticket price
-        calculatedDeliveryFee = 1500; // Delivery fee for ticket
+        calculatedSubtotal = ticketData.price || 5000;
+        calculatedDeliveryFee = 1500;
         calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        
         orderData.subtotal = calculatedSubtotal;
         orderData.deliveryFee = calculatedDeliveryFee;
         orderData.total = calculatedTotal;
@@ -579,7 +567,7 @@ const createOrder = async (req, res) => {
 
       case 'random':
         const deliveryData = validateRandomDelivery({
-          pickupAddress: pickupAddress || deliveryAddress, // Use pickupAddress if provided, else use deliveryAddress
+          pickupAddress: pickupAddress || deliveryAddress,
           deliveryAddress: randomDeliveryAddress || deliveryAddress,
           senderNumber,
           receiverNumber,
@@ -587,12 +575,9 @@ const createOrder = async (req, res) => {
           price: deliveryPrice
         });
         orderData.deliveryData = deliveryData;
-        
-        // Calculate delivery totals
-        calculatedSubtotal = deliveryData.price || 0; // Base delivery price
-        calculatedDeliveryFee = 1000; // Service fee
+        calculatedSubtotal = deliveryData.price || 0;
+        calculatedDeliveryFee = 1000;
         calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        
         orderData.subtotal = calculatedSubtotal;
         orderData.deliveryFee = calculatedDeliveryFee;
         orderData.total = calculatedTotal;
@@ -603,15 +588,19 @@ const createOrder = async (req, res) => {
     const orderNumber = await generateOrderNumber();
     orderData.orderNumber = orderNumber;
 
+    // 🔍 LOG THE FINAL ORDER DATA BEFORE CREATION
+    console.log('📦 Final orderData before create:', JSON.stringify(orderData, null, 2));
+
     // Create order
     const order = await Order.create([orderData], { session });
     const createdOrder = order[0];
+
+    console.log('✅ Order created successfully:', createdOrder._id);
 
     // Populate order data
     await createdOrder.populate('user', 'name phone');
     
     if (type === 'business') {
-      // FIX: Populate product and then business from product
       await createdOrder.populate({
         path: "items.product",
         select: "name images price featuredImage business",
@@ -627,7 +616,6 @@ const createOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    // Format response based on order type
     let responseData = {
       orderNumber: createdOrder.orderNumber,
       type: createdOrder.type,
@@ -641,7 +629,6 @@ const createOrder = async (req, res) => {
       createdAt: createdOrder.createdAt,
     };
 
-    // Add type-specific data to response
     switch (type) {
       case 'business':
         responseData.items = createdOrder.items.map((item) => ({
@@ -650,20 +637,16 @@ const createOrder = async (req, res) => {
           featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
           price: item.price,
           quantity: item.quantity,
-          // FIX: Get business from product.business
           business: item.product.business?.name || 'Business not found',
           deliveryTime: item.product.business?.deliveryTime || 'N/A',
         }));
         break;
-
       case 'errand':
         responseData.errandItems = createdOrder.errandItems;
         break;
-
       case 'ticket':
         responseData.ticketData = createdOrder.ticketData;
         break;
-
       case 'random':
         responseData.deliveryData = createdOrder.deliveryData;
         break;
@@ -678,7 +661,8 @@ const createOrder = async (req, res) => {
 
   } catch (error) {
     await session.abortTransaction();
-    console.error("Order creation error:", error);
+    console.error("❌ Order creation error:", error);
+    console.error("Stack trace:", error.stack); // 🔥 ADD THIS
 
     if (error.code === 11000) {
       return res.status(400).json({
