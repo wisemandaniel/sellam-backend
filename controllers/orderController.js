@@ -96,6 +96,9 @@ const validateTicketBooking = (ticketData) => {
 
 // Validate random delivery
 const validateRandomDelivery = (deliveryData) => {
+  // 🔍 LOG THE INCOMING DATA
+  console.log('🔍 validateRandomDelivery received:', JSON.stringify(deliveryData, null, 2));
+
   const { pickupAddress, deliveryAddress, senderNumber, receiverNumber, itemDescription } = deliveryData;
   
   if (!pickupAddress) {
@@ -491,6 +494,9 @@ const createOrder = async (req, res) => {
       // Random delivery specific
       pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
     } = req.body;
+
+    // 🔍 LOG THE ENTIRE REQUEST BODY
+    console.log('📥 Incoming createOrder request body:', JSON.stringify(req.body, null, 2));
 
     if (!req.user) {
       await session.abortTransaction();
