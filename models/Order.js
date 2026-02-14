@@ -114,7 +114,7 @@ const orderSchema = new mongoose.Schema(
     // Order type and items
     type: {
       type: String,
-      enum: ["business", "errand", "ticket", "random"],
+      enum: ["business", "errand", "ticket", "random", "bulk"],
       default: "business"
     },
     
@@ -123,7 +123,7 @@ const orderSchema = new mongoose.Schema(
     
     // Errand items (user-defined shopping list)
     errandItems: [errandItemSchema],
-    
+
     bulkData: bulkDataSchema,
     
     // Ticket booking data
