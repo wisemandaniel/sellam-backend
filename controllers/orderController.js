@@ -193,6 +193,117 @@ const validateBusinessOrder = async (items) => {
   };
 };
 
+/**
+ * Validate bulk order data
+ * @param {Object} bulkData - The bulkData object from frontend
+ * @returns {Object} - Validated and cleaned bulkData
+ * @throws {Error} - If validation fails
+ */
+const validateBulkOrder = (bulkData) => {
+  if (!bulkData) {
+    throw new Error('Bulk data is required');
+  }
+
+  const { type, parcels, scheduledDate, scheduledTime } = bulkData;
+
+  // Validate type
+  if (!type || !['pickup', 'delivery'].includes(type)) {
+    throw new Error('Bulk type must be either "pickup" or "delivery"');
+  }
+
+  // Validate scheduled date and time
+  if (!scheduledDate) {
+    throw new Error('Scheduled date is required');
+  }
+  if (!scheduledTime) {
+    throw new Error('Scheduled time is required');
+  }
+
+  // Validate parcels
+  if (!parcels || !Array.isArray(parcels) || parcels.length < 2) {
+    throw new Error('At least 2 parcels are required for bulk service');
+  }
+
+  // Validate each parcel
+  parcels.forEach((parcel, index) => {
+    if (!parcel.description || parcel.description.trim() === '') {
+      throw new Error(`Parcel ${index + 1}: description is required`);
+    }
+
+    if (type === 'pickup') {
+      if (!parcel.pickupAddress || parcel.pickupAddress.trim() === '') {
+        throw new Error(`Parcel ${index + 1}: pickup address is required`);
+      }
+      if (!parcel.pickupContactName || parcel.pickupContactName.trim() === '') {
+        throw new Error(`Parcel ${index + 1}: sender name is required`);
+      }
+      if (!parcel.pickupContactPhone || parcel.pickupContactPhone.trim() === '') {
+        throw new Error(`Parcel ${index + 1}: sender phone is required`);
+      }
+    } else { // delivery
+      if (!parcel.deliveryAddress || parcel.deliveryAddress.trim() === '') {
+        throw new Error(`Parcel ${index + 1}: delivery address is required`);
+      }
+      if (!parcel.receiverName || parcel.receiverName.trim() === '') {
+        throw new Error(`Parcel ${index + 1}: receiver name is required`);
+      }
+      if (!parcel.receiverPhone || parcel.receiverPhone.trim() === '') {
+        throw new Error(`Parcel ${index + 1}: receiver phone is required`);
+      }
+    }
+  });
+
+  // Validate common receiver/pickup details based on type
+  if (type === 'pickup') {
+    if (!bulkData.receiverName || bulkData.receiverName.trim() === '') {
+      throw new Error('Receiver name is required for bulk pickup');
+    }
+    if (!bulkData.receiverPhone || bulkData.receiverPhone.trim() === '') {
+      throw new Error('Receiver phone is required for bulk pickup');
+    }
+    if (!bulkData.receiverAddress || bulkData.receiverAddress.trim() === '') {
+      throw new Error('Receiver address is required for bulk pickup');
+    }
+  } else { // delivery
+    if (!bulkData.pickupContactName || bulkData.pickupContactName.trim() === '') {
+      throw new Error('Pickup contact name is required for bulk delivery');
+    }
+    if (!bulkData.pickupContactPhone || bulkData.pickupContactPhone.trim() === '') {
+      throw new Error('Pickup contact phone is required for bulk delivery');
+    }
+    if (!bulkData.pickupAddress || bulkData.pickupAddress.trim() === '') {
+      throw new Error('Pickup address is required for bulk delivery');
+    }
+  }
+
+  // Return validated data (you may also want to sanitize strings)
+  return {
+    type,
+    parcels: parcels.map(p => ({
+      description: p.description.trim(),
+      ...(type === 'pickup'
+        ? {
+            pickupAddress: p.pickupAddress.trim(),
+            pickupContactName: p.pickupContactName.trim(),
+            pickupContactPhone: p.pickupContactPhone.trim(),
+          }
+        : {
+            deliveryAddress: p.deliveryAddress.trim(),
+            receiverName: p.receiverName.trim(),
+            receiverPhone: p.receiverPhone.trim(),
+          })
+    })),
+    scheduledDate,
+    scheduledTime,
+    receiverName: type === 'pickup' ? bulkData.receiverName.trim() : undefined,
+    receiverPhone: type === 'pickup' ? bulkData.receiverPhone.trim() : undefined,
+    receiverAddress: type === 'pickup' ? bulkData.receiverAddress.trim() : undefined,
+    pickupContactName: type === 'delivery' ? bulkData.pickupContactName.trim() : undefined,
+    pickupContactPhone: type === 'delivery' ? bulkData.pickupContactPhone.trim() : undefined,
+    pickupAddress: type === 'delivery' ? bulkData.pickupAddress.trim() : undefined,
+  };
+};
+
 // ================================
 // WHATSAPP TEMPLATE FUNCTIONALITY
 // ================================
@@ -498,7 +609,8 @@ const createOrder = async (req, res) => {
       receiverNumber, 
       itemDescription, 
       deliveryPrice, 
-      departureCity 
+      departureCity,
+      bulkData  // NEW: bulk order data
     } = req.body;
 
     console.log('📥 Incoming createOrder request body:', JSON.stringify(req.body, null, 2));
@@ -511,11 +623,12 @@ const createOrder = async (req, res) => {
       });
     }
 
-    if (!['business', 'errand', 'ticket', 'random'].includes(type)) {
+    // Updated enum to include 'bulk'
+    if (!['business', 'errand', 'ticket', 'random', 'bulk'].includes(type)) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: "Valid order type is required (business, errand, ticket, random)"
+        message: "Valid order type is required (business, errand, ticket, random, bulk)"
       });
     }
 
@@ -562,7 +675,7 @@ const createOrder = async (req, res) => {
         break;
 
       case 'ticket':
-        // Base ticket details from request body (frontend sends idCard as passenger name)
+        // Base ticket details from request body
         let ticketDetails = {
           busAgency,
           seatNumber,
@@ -570,10 +683,10 @@ const createOrder = async (req, res) => {
           departureTime,
           destination,
           departureCity,
-          price: ticketPrice,      // total amount from frontend (seats*pricePerSeat + serviceFee)
+          price: ticketPrice,
         };
 
-        // Parse notes if it contains a JSON string (as sent by the frontend)
+        // Parse notes if it contains a JSON string
         let parsedNotes = {};
         if (notes && typeof notes === 'string' && notes.trim().startsWith('{')) {
           try {
@@ -601,7 +714,7 @@ const createOrder = async (req, res) => {
         const ticketData = validateTicketBooking(ticketDetails);
         orderData.ticketData = ticketData;
 
-        // Calculate financials based on parsed data (avoid using ticketPrice directly if it may double-count)
+        // Calculate financials
         const seatPriceTotal = ticketData.pricePerSeat * ticketData.seatCount;
         const serviceFee = ticketData.serviceFee;
 
@@ -631,13 +744,31 @@ const createOrder = async (req, res) => {
         orderData.deliveryFee = calculatedDeliveryFee;
         orderData.total = calculatedTotal;
         break;
+
+      // ============= NEW: BULK ORDER CASE =============
+      case 'bulk':
+        // Validate bulkData
+        const validatedBulkData = validateBulkOrder(bulkData);
+        orderData.bulkData = validatedBulkData;
+
+        // Calculate financials: 750 per parcel, no extra delivery fee
+        const totalParcels = validatedBulkData.parcels.length;
+        const perParcelFee = 750;
+        orderData.subtotal = totalParcels * perParcelFee;
+        orderData.deliveryFee = 0;
+        orderData.total = orderData.subtotal;
+
+        // Optionally, parse notes if any extra info was sent
+        if (notes) {
+          orderData.notes = notes; // keep original notes if any
+        }
+        break;
     }
 
     // Generate order number
     const orderNumber = await generateOrderNumber();
     orderData.orderNumber = orderNumber;
 
-    // 🔍 LOG THE FINAL ORDER DATA BEFORE CREATION
     console.log('📦 Final orderData before create:', JSON.stringify(orderData, null, 2));
 
     // Create order
@@ -698,6 +829,9 @@ const createOrder = async (req, res) => {
         break;
       case 'random':
         responseData.deliveryData = createdOrder.deliveryData;
+        break;
+      case 'bulk':
+        responseData.bulkData = createdOrder.bulkData;
         break;
     }
 
