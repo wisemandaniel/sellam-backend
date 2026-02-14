@@ -485,8 +485,19 @@ const createOrder = async (req, res) => {
       phone, 
       notes,
       errandItems,
-      busAgency, seatNumber, idCard, departureTime, destination, ticketPrice,
-      pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
+      busAgency, 
+      seatNumber, 
+      idCard, 
+      departureTime, 
+      destination, 
+      ticketPrice,
+      pickupAddress, 
+      deliveryAddress: randomDeliveryAddress, 
+      senderNumber, 
+      receiverNumber, 
+      itemDescription, 
+      deliveryPrice, 
+      departureCity 
     } = req.body;
 
     console.log('📥 Incoming createOrder request body:', JSON.stringify(req.body, null, 2));
@@ -557,6 +568,7 @@ const createOrder = async (req, res) => {
           passengerName: idCard,   // map idCard to passengerName
           departureTime,
           destination,
+          departureCity,
           price: ticketPrice,      // total amount from frontend (seats*pricePerSeat + serviceFee)
         };
 
