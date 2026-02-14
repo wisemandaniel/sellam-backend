@@ -65,32 +65,29 @@ const validateErrandItems = (items) => {
 };
 
 // Validate ticket booking
-const validateTicketBooking = (ticketData) => {
-  const { busAgency, seatNumber, idCard, departureTime, destination } = ticketData;
-  
-  if (!busAgency) {
-    throw new Error("Bus agency is required for ticket booking");
-  }
-  if (!seatNumber) {
-    throw new Error("Seat number is required for ticket booking");
-  }
-  if (!idCard) {
-    throw new Error("ID card is required for ticket booking");
-  }
-  if (!departureTime) {
-    throw new Error("Departure time is required for ticket booking");
-  }
-  if (!destination) {
-    throw new Error("Destination is required for ticket booking");
+const validateTicketBooking = (data) => {
+  // Required fields (must be present)
+  if (!data.busAgency || !data.seatNumber || !data.passengerName || !data.departureTime || !data.destination) {
+    throw new Error('Missing required ticket booking fields: busAgency, seatNumber, passengerName, departureTime, destination');
   }
 
+  // Return the data as is (with defaults for missing optional fields)
   return {
-    busAgency,
-    seatNumber,
-    idCard,
-    departureTime: new Date(departureTime),
-    destination,
-    price: ticketData.price || 0
+    busAgency: data.busAgency,
+    seatNumber: data.seatNumber,
+    passengerName: data.passengerName,
+    departureTime: data.departureTime,
+    destination: data.destination,
+    price: data.price || 0,
+    backupSeats: data.backupSeats || [],
+    travelTimeOfDay: data.travelTimeOfDay || 'morning',
+    passengerIDNumber: data.passengerIDNumber || '',
+    idPhotoFront: data.idPhotoFront || '',
+    idPhotoBack: data.idPhotoBack || '',
+    agencyDetails: data.agencyDetails || {},
+    serviceFee: data.serviceFee || 1500,
+    pricePerSeat: data.pricePerSeat || 0,
+    seatCount: data.seatCount || 0
   };
 };
 
@@ -553,16 +550,55 @@ const createOrder = async (req, res) => {
         break;
 
       case 'ticket':
-        const ticketData = validateTicketBooking({
-          busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
-        });
+        // Base ticket details from request body (frontend sends idCard as passenger name)
+        let ticketDetails = {
+          busAgency,
+          seatNumber,
+          passengerName: idCard,   // map idCard to passengerName
+          departureTime,
+          destination,
+          price: ticketPrice,      // total amount from frontend (seats*pricePerSeat + serviceFee)
+        };
+
+        // Parse notes if it contains a JSON string (as sent by the frontend)
+        let parsedNotes = {};
+        if (notes && typeof notes === 'string' && notes.trim().startsWith('{')) {
+          try {
+            parsedNotes = JSON.parse(notes);
+          } catch (e) {
+            console.warn('Could not parse notes JSON for ticket booking:', e.message);
+          }
+        }
+
+        // Extend ticketDetails with parsed data
+        ticketDetails = {
+          ...ticketDetails,
+          backupSeats: parsedNotes.backupSeats || [],
+          travelTimeOfDay: parsedNotes.travelTimeOfDay || 'morning',
+          passengerIDNumber: parsedNotes.passengerIDNumber || '',
+          idPhotoFront: parsedNotes.idPhotos?.front || '',
+          idPhotoBack: parsedNotes.idPhotos?.back || '',
+          agencyDetails: parsedNotes.agencyDetails || {},
+          serviceFee: parsedNotes.serviceFee || 1500,
+          pricePerSeat: parsedNotes.pricePerSeat || 0,
+          seatCount: parsedNotes.seatCount || (seatNumber ? seatNumber.split(',').length : 0)
+        };
+
+        // Validate the complete ticket data
+        const ticketData = validateTicketBooking(ticketDetails);
         orderData.ticketData = ticketData;
-        calculatedSubtotal = ticketData.price || 5000;
-        calculatedDeliveryFee = 1500;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
+
+        // Calculate financials based on parsed data (avoid using ticketPrice directly if it may double-count)
+        const seatPriceTotal = ticketData.pricePerSeat * ticketData.seatCount;
+        const serviceFee = ticketData.serviceFee;
+
+        orderData.subtotal = seatPriceTotal;
+        orderData.deliveryFee = serviceFee;
+        orderData.total = seatPriceTotal + serviceFee;
+
+        // Clear notes because we've extracted all data into ticketData
+        orderData.notes = '';
+
         break;
 
       case 'random':
@@ -662,7 +698,7 @@ const createOrder = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     console.error("❌ Order creation error:", error);
-    console.error("Stack trace:", error.stack); // 🔥 ADD THIS
+    console.error("Stack trace:", error.stack);
 
     if (error.code === 11000) {
       return res.status(400).json({

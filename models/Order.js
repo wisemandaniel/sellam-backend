@@ -34,11 +34,31 @@ const errandItemSchema = new mongoose.Schema(
 const ticketDataSchema = new mongoose.Schema(
   {
     busAgency: { type: String, required: true },
-    seatNumber: { type: String, required: true },
-    idCard: { type: String, required: true },
+    seatNumber: { type: String, required: true },      // comma-separated primary seats
+    passengerName: { type: String, required: true },   // renamed from idCard
     departureTime: { type: Date, required: true },
     destination: { type: String, required: true },
-    price: { type: Number, default: 0 }
+    price: { type: Number, default: 0 },               // total ticket price (seats × pricePerSeat)
+
+    // Other fields (unchanged)
+    backupSeats: { type: [String], default: [] },
+    travelTimeOfDay: {
+      type: String,
+      enum: ['morning', 'afternoon', 'evening', 'night'],
+      default: 'morning'
+    },
+    passengerIDNumber: { type: String, default: '' },  // ID card number
+    idPhotoFront: { type: String, default: '' },
+    idPhotoBack: { type: String, default: '' },
+    agencyDetails: {
+      id: { type: String },
+      departureTime: { type: String },
+      arrivalTime: { type: String },
+      busType: { type: String }
+    },
+    serviceFee: { type: Number, default: 1500 },
+    pricePerSeat: { type: Number, default: 0 },
+    seatCount: { type: Number, default: 0 }
   },
   { _id: false }
 );
