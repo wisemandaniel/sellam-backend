@@ -38,6 +38,7 @@ const ticketDataSchema = new mongoose.Schema(
     passengerName: { type: String, required: true },   // renamed from idCard
     departureTime: { type: Date, required: true },
     destination: { type: String, required: true },
+    departureCity: { type: String, required: true },
     price: { type: Number, default: 0 },               // total ticket price (seats × pricePerSeat)
 
     // Other fields (unchanged)
