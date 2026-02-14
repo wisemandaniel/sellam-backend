@@ -19,7 +19,8 @@ const {
   createOrderForUser,
   getOrdersByBusiness,
   getBusinessOrderStats,
-  confirmOrder
+  confirmOrder,
+  getOrderByNumber
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -33,6 +34,7 @@ router.use(protect);
 // ====================
 router.post('/', createOrder); // Customers create orders
 router.get('/my-orders', getMyOrders); // Customers view their orders
+router.get('/:orderNumber', getOrderByNumber);
 router.patch('/:orderNumber/cancel', cancelOrder);          // Cancel own order
 router.delete('/:orderNumber', deleteMyOrder);                   
 // Delete own order (only if cancelled/pending)
