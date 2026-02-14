@@ -67,7 +67,7 @@ const validateErrandItems = (items) => {
 // Validate ticket booking
 const validateTicketBooking = (data) => {
   // Required fields (must be present)
-  if (!data.busAgency || !data.seatNumber || !data.passengerName || !data.departureTime || !data.destination) {
+  if (!data.busAgency || !data.seatNumber || !data.passengerName || !data.departureTime || !data.destination || !data.departureCity) {
     throw new Error('Missing required ticket booking fields: busAgency, seatNumber, passengerName, departureTime, destination');
   }
 
@@ -78,6 +78,7 @@ const validateTicketBooking = (data) => {
     passengerName: data.passengerName,
     departureTime: data.departureTime,
     destination: data.destination,
+    departureCity: data.departureCity,
     price: data.price || 0,
     backupSeats: data.backupSeats || [],
     travelTimeOfDay: data.travelTimeOfDay || 'morning',
