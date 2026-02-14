@@ -64,6 +64,35 @@ const ticketDataSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const bulkDataSchema = new mongoose.Schema(
+  {
+    type: { type: String, enum: ['pickup', 'delivery'], required: true },
+    // Common fields
+    parcels: [{
+      description: { type: String, required: true },
+      // For pickup type
+      pickupAddress: { type: String },
+      pickupContactName: { type: String },
+      pickupContactPhone: { type: String },
+      // For delivery type
+      deliveryAddress: { type: String },
+      receiverName: { type: String },
+      receiverPhone: { type: String },
+    }],
+    scheduledDate: { type: Date, required: true },
+    scheduledTime: { type: String, required: true },
+    // For pickup type (one receiver)
+    receiverName: { type: String },
+    receiverPhone: { type: String },
+    receiverAddress: { type: String },
+    // For delivery type (one pickup)
+    pickupContactName: { type: String },
+    pickupContactPhone: { type: String },
+    pickupAddress: { type: String },
+  },
+  { _id: false }
+);
+
 const deliveryDataSchema = new mongoose.Schema(
   {
     pickupAddress: { type: String, required: true },
@@ -94,6 +123,8 @@ const orderSchema = new mongoose.Schema(
     
     // Errand items (user-defined shopping list)
     errandItems: [errandItemSchema],
+    
+    bulkData: bulkDataSchema,
     
     // Ticket booking data
     ticketData: ticketDataSchema,
