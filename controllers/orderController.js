@@ -872,6 +872,85 @@ const createOrder = async (req, res) => {
 };
 
 /**
+ * Get order by order number
+ */
+const getOrderByNumber = async (req, res) => {
+  try {
+    const { orderNumber } = req.params;
+
+    const order = await Order.findOne({ orderNumber })
+      .populate('user', 'name phone email')
+      .populate('rider', 'name phone vehicle plateNumber'); // populate rider details
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found',
+      });
+    }
+
+    // Prepare response data (similar to the structure used in createOrder)
+    let responseData = {
+      orderNumber: order.orderNumber,
+      type: order.type,
+      status: order.status,
+      total: order.total,
+      deliveryFee: order.deliveryFee,
+      subtotal: order.subtotal,
+      deliveryAddress: order.deliveryAddress,
+      phone: order.phone,
+      notes: order.notes,
+      createdAt: order.createdAt,
+      rider: order.rider ? {
+        name: order.rider.name,
+        phone: order.rider.phone,
+        vehicle: order.rider.vehicle,
+        plateNumber: order.rider.plateNumber,
+      } : null,
+    };
+
+    // Add type-specific data
+    switch (order.type) {
+      case 'business':
+        responseData.items = order.items.map((item) => ({
+          name: item.product?.name,
+          images: item.product?.images || [],
+          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+          price: item.price,
+          quantity: item.quantity,
+          business: item.product?.business?.name || 'Business not found',
+          deliveryTime: item.product?.business?.deliveryTime || 'N/A',
+        }));
+        break;
+      case 'errand':
+        responseData.errandItems = order.errandItems;
+        break;
+      case 'ticket':
+        responseData.ticketData = order.ticketData;
+        break;
+      case 'random':
+        responseData.deliveryData = order.deliveryData;
+        break;
+      case 'bulk':
+        responseData.bulkData = order.bulkData;
+        break;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching order by number:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching order',
+      error: error.message,
+    });
+  }
+};
+
+/**
  * @desc    Cancel an order (customer only)
  * @route   PATCH /api/orders/:orderId/cancel
  * @access  Private (order owner)
@@ -3355,5 +3434,6 @@ module.exports = {
   // NEW BUSINESS FUNCTIONS
   getOrdersByBusiness,
   getBusinessOrderStats,
-  confirmOrder
+  confirmOrder,
+  getOrderByNumber
 };
