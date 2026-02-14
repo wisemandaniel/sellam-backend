@@ -68,7 +68,7 @@ const validateErrandItems = (items) => {
 const validateTicketBooking = (data) => {
   // Required fields (must be present)
   if (!data.busAgency || !data.seatNumber || !data.passengerName || !data.departureTime || !data.destination || !data.departureCity) {
-    throw new Error('Missing required ticket booking fields: busAgency, seatNumber, passengerName, departureTime, destination');
+    throw new Error('Missing required ticket booking fields: busAgency, seatNumber, passengerName, departureTime, destination, departureCity');
   }
 
   // Return the data as is (with defaults for missing optional fields)
@@ -951,11 +951,6 @@ const getOrderByNumber = async (req, res) => {
 };
 
 /**
- * @desc    Cancel an order (customer only)
- * @route   PATCH /api/orders/:orderId/cancel
- * @access  Private (order owner)
- */
-/**
  * @desc    Cancel an order (customer only) - using orderNumber
  * @route   PATCH /api/orders/order-number/:orderNumber/cancel
  * @access  Private (order owner)
@@ -1340,7 +1335,7 @@ const createOrderForUser = async (req, res) => {
   }
 };
 
-// Get user orders
+// Get user orders - FIXED to include bulkData and all fields
 const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id })
@@ -1352,8 +1347,8 @@ const getMyOrders = async (req, res) => {
           select: 'name deliveryTime'
         }
       })
-      // FIX: Add paymentStatus and paymentMethod to select
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt deliveredAt paymentStatus paymentMethod')
+      // ADDED: bulkData to the select
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt deliveredAt paymentStatus paymentMethod')
       .sort({ createdAt: -1 });
 
     const formattedOrders = orders.map(order => {
@@ -1400,6 +1395,11 @@ const getMyOrders = async (req, res) => {
 
         case 'random':
           baseOrder.deliveryData = order.deliveryData;
+          break;
+
+        // ADDED: bulk case
+        case 'bulk':
+          baseOrder.bulkData = order.bulkData;
           break;
       }
 
@@ -1492,7 +1492,8 @@ const getPendingOrders = async (req, res) => {
           select: 'name phone address deliveryTime coordinates'
         }
       })
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt updatedAt')
+      // ADDED: bulkData to select
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt updatedAt')
       .sort({ createdAt: -1 });
 
     console.log(`✅ Found ${pendingOrders.length} pending orders`);
@@ -1551,6 +1552,11 @@ const getPendingOrders = async (req, res) => {
             baseOrder.pickupAddress = order.deliveryData.pickupAddress;
           }
           break;
+
+        // ADDED: bulk case
+        case 'bulk':
+          baseOrder.bulkData = order.bulkData;
+          break;
       }
 
       return baseOrder;
@@ -1560,7 +1566,7 @@ const getPendingOrders = async (req, res) => {
       success: true,
       count: formattedOrders.length,
       data: formattedOrders,
-      message: `Found ${formattedOrders .length} pending orders`
+      message: `Found ${formattedOrders.length} pending orders`
     });
 
   } catch (error) {
@@ -1593,7 +1599,8 @@ const getMyCompletedDeliveries = async (req, res) => {
         select: 'name address deliveryTime coordinates phone'
       }
     })
-    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
+    // ADDED: bulkData to select
+    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ deliveredAt: -1 })
     .lean();
 
@@ -1649,6 +1656,11 @@ const getMyCompletedDeliveries = async (req, res) => {
 
         case 'random':
           baseDelivery.deliveryData = order.deliveryData;
+          break;
+
+        // ADDED: bulk case
+        case 'bulk':
+          baseDelivery.bulkData = order.bulkData;
           break;
       }
 
@@ -1940,7 +1952,8 @@ const getMyActiveDeliveries = async (req, res) => {
         select: 'name address deliveryTime coordinates phone'
       }
     })
-    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
+    // ADDED: bulkData to select
+    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ acceptedAt: -1 })
     .lean();
 
@@ -1996,6 +2009,11 @@ const getMyActiveDeliveries = async (req, res) => {
 
         case 'random':
           baseDelivery.deliveryData = order.deliveryData;
+          break;
+
+        // ADDED: bulk case
+        case 'bulk':
+          baseDelivery.bulkData = order.bulkData;
           break;
       }
 
@@ -2288,7 +2306,8 @@ const getAllOrders = async (req, res) => {
           select: 'name phone address deliveryTime'
         }
       })
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated paymentStatus paymentMethod distance rejectedBy rejectedAt')
+      // ADDED: bulkData to select
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated paymentStatus paymentMethod distance rejectedBy rejectedAt')
       .sort({ createdAt: -1 });
 
     console.log(`✅ ADMIN - Found ${orders.length} total orders`);
@@ -2363,6 +2382,11 @@ const getAllOrders = async (req, res) => {
 
         case 'random':
           baseOrder.deliveryData = order.deliveryData;
+          break;
+
+        // ADDED: bulk case
+        case 'bulk':
+          baseOrder.bulkData = order.bulkData;
           break;
       }
 
@@ -2493,6 +2517,8 @@ const updateOrder = async (req, res) => {
       responseData.ticketData = updatedOrder.ticketData;
     } else if (updatedOrder.type === 'random') {
       responseData.deliveryData = updatedOrder.deliveryData;
+    } else if (updatedOrder.type === 'bulk') {
+      responseData.bulkData = updatedOrder.bulkData;
     }
 
     res.json({
@@ -2651,7 +2677,8 @@ const getRiderOrders = async (req, res) => {
           select: 'name address phone deliveryTime'
         }
       })
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
+      // ADDED: bulkData to select
+      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
@@ -2735,6 +2762,11 @@ const getRiderOrders = async (req, res) => {
 
         case 'random':
           baseOrder.deliveryData = order.deliveryData;
+          break;
+
+        // ADDED: bulk case
+        case 'bulk':
+          baseOrder.bulkData = order.bulkData;
           break;
       }
 
