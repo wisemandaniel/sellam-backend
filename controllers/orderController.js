@@ -872,7 +872,7 @@ const createOrder = async (req, res) => {
 };
 
 /**
- * Get order by order number
+ * Get order by order number – includes full status history
  */
 const getOrderByNumber = async (req, res) => {
   try {
@@ -880,7 +880,7 @@ const getOrderByNumber = async (req, res) => {
 
     const order = await Order.findOne({ orderNumber })
       .populate('user', 'name phone email')
-      .populate('rider', 'name phone vehicle plateNumber'); // populate rider details
+      .populate('rider', 'name phone vehicle plateNumber');
 
     if (!order) {
       return res.status(404).json({
@@ -889,7 +889,42 @@ const getOrderByNumber = async (req, res) => {
       });
     }
 
-    // Prepare response data (similar to the structure used in createOrder)
+    // Build status history array
+    const statusHistory = [];
+
+    const addEvent = (status, timestamp) => {
+      if (timestamp) {
+        statusHistory.push({
+          status,
+          timestamp,
+          description: getStatusDescription(status),
+        });
+      }
+    };
+
+    const getStatusDescription = (status) => {
+      const descriptions = {
+        pending: 'Order placed and awaiting confirmation',
+        confirmed: 'Order confirmed',                   // ✅ new
+        accepted: 'Order accepted by a driver',
+        picked_up: 'Driver has picked up the parcel',
+        delivered: 'Parcel delivered successfully',
+        cancelled: 'Order was cancelled',
+        rejected: 'Order was rejected by the driver',
+      };
+      return descriptions[status] || status;
+    };
+
+    addEvent('pending', order.createdAt);
+    addEvent('confirmed', order.confirmedAt);            // ✅ new
+    addEvent('accepted', order.acceptedAt);
+    addEvent('picked_up', order.pickedUpAt);
+    addEvent('delivered', order.deliveredAt);
+    addEvent('cancelled', order.cancelledAt);
+    addEvent('rejected', order.rejectedAt);
+
+    statusHistory.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
     let responseData = {
       orderNumber: order.orderNumber,
       type: order.type,
@@ -901,15 +936,17 @@ const getOrderByNumber = async (req, res) => {
       phone: order.phone,
       notes: order.notes,
       createdAt: order.createdAt,
+      confirmedAt: order.confirmedAt,                     // ✅ include in response
       rider: order.rider ? {
         name: order.rider.name,
         phone: order.rider.phone,
         vehicle: order.rider.vehicle,
         plateNumber: order.rider.plateNumber,
       } : null,
+      statusHistory,
     };
 
-    // Add type-specific data
+    // Add type-specific data (unchanged)
     switch (order.type) {
       case 'business':
         responseData.items = order.items.map((item) => ({
@@ -3376,6 +3413,7 @@ const getBusinessOrderStats = async (req, res) => {
  * @route   PATCH /api/orders/order-number/:orderNumber/confirm
  * @access  Private (order owner)
  */
+
 const confirmOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -3397,7 +3435,6 @@ const confirmOrder = async (req, res) => {
       });
     }
 
-    // Prevent re‑confirming an already confirmed order
     if (order.status === 'confirmed') {
       await session.abortTransaction();
       return res.status(400).json({
@@ -3406,7 +3443,6 @@ const confirmOrder = async (req, res) => {
       });
     }
 
-    // Only allow confirmation for orders that are still pending
     if (order.status !== 'pending') {
       await session.abortTransaction();
       return res.status(400).json({
@@ -3418,6 +3454,7 @@ const confirmOrder = async (req, res) => {
     order.status = 'confirmed';
     order.paymentStatus = 'paid';
     order.paymentMethod = 'momo';
+    order.confirmedAt = new Date(); // ✅ set confirmation timestamp
     await order.save({ session });
 
     await session.commitTransaction();
@@ -3429,6 +3466,7 @@ const confirmOrder = async (req, res) => {
         status: order.status,
         paymentStatus: order.paymentStatus,
         paymentMethod: order.paymentMethod,
+        confirmedAt: order.confirmedAt,
       },
       message: 'Order confirmed successfully',
     });
