@@ -67,6 +67,7 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/cart', require('./routes/carts'));
+app.use('/api/agency', require('./routes/agency'));
 
 // Frontend matching routes
 app.use('/api/businesses', require('./routes/businesses'));
