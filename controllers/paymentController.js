@@ -245,6 +245,7 @@ exports.createPayment = async (req, res) => {
               linkedOrder.paymentStatus = 'paid';
               linkedOrder.paymentMethod = 'momo';
               linkedOrder.status = 'confirmed';
+              linkedOrder.confirmedAt = new Date();
               await linkedOrder.save();
               console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
             }
@@ -326,6 +327,7 @@ exports.fapshiWebhook = async (req, res) => {
         order.paymentStatus = 'paid';
         order.paymentMethod = 'momo';
         order.status = 'confirmed';
+        order.confirmedAt = new Date();
         await order.save();
         console.log(`✅ Order ${order.orderNumber} marked as paid and confirmed via webhook`);
       }
@@ -411,6 +413,7 @@ exports.getTransactionStatus = async (req, res) => {
           order.paymentStatus = 'paid';
           order.paymentMethod = 'momo';
           order.status = 'confirmed';
+          order.confirmedAt = new Date();
           await order.save();
           console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
         }

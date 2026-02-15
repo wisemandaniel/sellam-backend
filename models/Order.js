@@ -40,8 +40,6 @@ const ticketDataSchema = new mongoose.Schema(
     destination: { type: String, required: true },
     departureCity: { type: String, required: true },
     price: { type: Number, default: 0 },               // total ticket price (seats × pricePerSeat)
-
-    // Other fields (unchanged)
     backupSeats: { type: [String], default: [] },
     travelTimeOfDay: {
       type: String,
@@ -67,25 +65,20 @@ const ticketDataSchema = new mongoose.Schema(
 const bulkDataSchema = new mongoose.Schema(
   {
     type: { type: String, enum: ['pickup', 'delivery'], required: true },
-    // Common fields
     parcels: [{
       description: { type: String, required: true },
-      // For pickup type
       pickupAddress: { type: String },
       pickupContactName: { type: String },
       pickupContactPhone: { type: String },
-      // For delivery type
       deliveryAddress: { type: String },
       receiverName: { type: String },
       receiverPhone: { type: String },
     }],
     scheduledDate: { type: Date, required: true },
     scheduledTime: { type: String, required: true },
-    // For pickup type (one receiver)
     receiverName: { type: String },
     receiverPhone: { type: String },
     receiverAddress: { type: String },
-    // For delivery type (one pickup)
     pickupContactName: { type: String },
     pickupContactPhone: { type: String },
     pickupAddress: { type: String },
@@ -111,33 +104,22 @@ const orderSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     rider: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     
-    // Order type and items
     type: {
       type: String,
       enum: ["business", "errand", "ticket", "random", "bulk"],
       default: "business"
     },
     
-    // Business order items (products from stores)
     items: [orderItemSchema],
-    
-    // Errand items (user-defined shopping list)
     errandItems: [errandItemSchema],
-
     bulkData: bulkDataSchema,
-    
-    // Ticket booking data
     ticketData: ticketDataSchema,
-    
-    // Random delivery data
     deliveryData: deliveryDataSchema,
     
-    // Financials
     subtotal: { type: Number, required: true, min: 0 },
     deliveryFee: { type: Number, required: true, min: 0 },
     total: { type: Number, required: true, min: 0 },
     
-    // Status and payment
     status: {
       type: String,
       enum: ["pending", "confirmed", "accepted", "picked_up", "delivered", "cancelled", "rejected"],
@@ -154,13 +136,13 @@ const orderSchema = new mongoose.Schema(
       default: "np",
     },
     
-    // Delivery information
     deliveryAddress: { type: String, required: true },
     phone: { type: String, required: true },
     notes: { type: String, default: "" },
     distance: { type: Number, default: 0 },
 
-    // Timestamps
+    // ✅ NEW: confirmation timestamp
+    confirmedAt: { type: Date },
     acceptedAt: { type: Date },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     rejectedAt: { type: Date },
@@ -168,7 +150,6 @@ const orderSchema = new mongoose.Schema(
     deliveredAt: { type: Date },
     cancelledAt: { type: Date },
 
-    // Admin creation tracking
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     isAdminCreated: { type: Boolean, default: false }
   },
