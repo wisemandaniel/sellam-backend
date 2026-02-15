@@ -1512,11 +1512,11 @@ const getOrder = async (req, res) => {
 };
 
 // Get all pending orders (for riders/drivers)
-const getPendingOrders = async (req, res) => {
+const getConfirmedOrders = async (req, res) => {
   try {
     console.log('📦 Fetching pending orders...');
 
-    const pendingOrders = await Order.find({ status: 'pending' })
+    const pendingOrders = await Order.find({ status: 'confirmed' })
       .populate({
         path: 'user',
         select: 'name phone'
@@ -3489,7 +3489,7 @@ module.exports = {
   getOrder,
   cancelOrder,
   deleteMyOrder,
-  getPendingOrders,
+  getConfirmedOrders,
   getMyCompletedDeliveries,
   acceptDelivery,
   rejectDelivery,
