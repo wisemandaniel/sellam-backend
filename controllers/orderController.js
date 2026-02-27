@@ -700,7 +700,7 @@ const createOrder = async (req, res) => {
         ticketDetails = {
           ...ticketDetails,
           backupSeats: parsedNotes.backupSeats || [],
-          travelTimeOfDay: parsedNotes.travelTimeOfDay || 'morning',
+          travelTimeOfDay: travelTimeOfDay || parsedNotes.travelTimeOfDay || 'morning',
           passengerIDNumber: parsedNotes.passengerIDNumber || '',
           idPhotoFront: parsedNotes.idPhotos?.front || '',
           idPhotoBack: parsedNotes.idPhotos?.back || '',
@@ -935,6 +935,7 @@ const getOrderByNumber = async (req, res) => {
       deliveryAddress: order.deliveryAddress,
       phone: order.phone,
       notes: order.notes,
+      travelTimeOfDay: order.travelTimeOfDay,
       createdAt: order.createdAt,
       confirmedAt: order.confirmedAt,                     // ✅ include in response
       rider: order.rider ? {
