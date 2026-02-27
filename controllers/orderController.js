@@ -3425,6 +3425,18 @@ const confirmOrder = async (req, res) => {
   try {
     const { orderNumber } = req.params;
     const userId = req.user._id;
+    // Default to 'momo' if no pm query param is provided
+    const paymentMethod = req.query.pm || 'momo';
+
+    // Validate allowed payment methods
+    const allowedMethods = ['cash', 'momo'];
+    if (!allowedMethods.includes(paymentMethod)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Invalid payment method. Allowed: ${allowedMethods.join(', ')}`,
+      });
+    }
 
     const order = await Order.findOne({
       orderNumber,
@@ -3455,10 +3467,19 @@ const confirmOrder = async (req, res) => {
       });
     }
 
+    // Update order with confirmation details
     order.status = 'confirmed';
-    order.paymentStatus = 'paid';
-    order.paymentMethod = 'momo';
-    order.confirmedAt = new Date(); // ✅ set confirmation timestamp
+    order.paymentMethod = paymentMethod;
+
+    // Set payment status based on payment method
+    if (paymentMethod === 'momo') {
+      order.paymentStatus = 'paid';
+    } else if (paymentMethod === 'cash') {
+      // Cash orders remain unpaid until delivery
+      order.paymentStatus = 'unpaid';
+    }
+
+    order.confirmedAt = new Date();
     await order.save({ session });
 
     await session.commitTransaction();
