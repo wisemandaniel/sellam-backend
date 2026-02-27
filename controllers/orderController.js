@@ -935,6 +935,7 @@ const getOrderByNumber = async (req, res) => {
       deliveryAddress: order.deliveryAddress,
       phone: order.phone,
       notes: order.notes,
+      travelTimeOfDay: order.travelTimeOfDay,
       createdAt: order.createdAt,
       confirmedAt: order.confirmedAt,                     // ✅ include in response
       rider: order.rider ? {
