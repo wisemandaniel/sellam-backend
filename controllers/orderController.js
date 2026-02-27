@@ -601,6 +601,7 @@ const createOrder = async (req, res) => {
       seatNumber, 
       idCard, 
       departureTime, 
+      travelTimeOfDay,
       destination, 
       ticketPrice,
       pickupAddress, 
