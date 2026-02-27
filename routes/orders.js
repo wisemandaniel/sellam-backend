@@ -39,7 +39,7 @@ router.patch('/:orderNumber/cancel', cancelOrder);          // Cancel own order
 router.delete('/:orderNumber', deleteMyOrder);                   
 // Delete own order (only if cancelled/pending)
 router.get('/:id', getOrder); // Customers view specific order
-router.patch('/:orderNumber/confirm?pm', confirmOrder);
+router.patch('/:orderNumber/confirm', confirmOrder);
 
 // ====================
 // RIDER/ADMIN ROUTES
