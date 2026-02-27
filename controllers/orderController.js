@@ -944,6 +944,8 @@ const getOrderByNumber = async (req, res) => {
         plateNumber: order.rider.plateNumber,
       } : null,
       statusHistory,
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus
     };
 
     // Add type-specific data (unchanged)
