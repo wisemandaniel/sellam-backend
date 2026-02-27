@@ -700,7 +700,7 @@ const createOrder = async (req, res) => {
         ticketDetails = {
           ...ticketDetails,
           backupSeats: parsedNotes.backupSeats || [],
-          travelTimeOfDay: parsedNotes.travelTimeOfDay || 'morning',
+          travelTimeOfDay: travelTimeOfDay || parsedNotes.travelTimeOfDay || 'morning',
           passengerIDNumber: parsedNotes.passengerIDNumber || '',
           idPhotoFront: parsedNotes.idPhotos?.front || '',
           idPhotoBack: parsedNotes.idPhotos?.back || '',
