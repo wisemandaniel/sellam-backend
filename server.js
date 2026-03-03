@@ -32,9 +32,9 @@ const PORT = process.env.PORT || 5000;
 // CORS Configuration - Allow requests from ANY origin
 app.use(cors());
 
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// Middleware - Increase payload size limit for large images
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 
 // Routes
 app.get('/', (req, res) => {
@@ -67,6 +67,7 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/cart', require('./routes/carts'));
+app.use('/api/agency', require('./routes/agency'));
 
 // Frontend matching routes
 app.use('/api/businesses', require('./routes/businesses'));

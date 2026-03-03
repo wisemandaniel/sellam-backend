@@ -5,7 +5,6 @@ const {
   getOrder,
   cancelOrder,
   deleteMyOrder,
-  getPendingOrders,
   getMyCompletedDeliveries,
   acceptDelivery,
   rejectDelivery,
@@ -20,7 +19,8 @@ const {
   getOrdersByBusiness,
   getBusinessOrderStats,
   confirmOrder,
-  getOrderByNumber
+  getOrderByNumber,
+  getConfirmedOrders
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -44,7 +44,7 @@ router.patch('/:orderNumber/confirm', confirmOrder);
 // ====================
 // RIDER/ADMIN ROUTES
 // ====================
-router.get('/status/pending', authorize('rider', 'admin'), getPendingOrders);
+router.get('/status/confirmed', authorize('rider', 'admin'), getConfirmedOrders);
 router.get('/my-deliveries/active', authorize('rider', 'admin'), getMyActiveDeliveries);
 router.get('/my-deliveries/completed', authorize('rider', 'admin'), getMyCompletedDeliveries);
 router.patch('/:orderId/accept', authorize('rider', 'admin'), acceptDelivery);
