@@ -1,7 +1,7 @@
 /**
  * controllers/orderController.js
  * Full delivery/order logic with all route handlers.
- * Updated to support new structured errand fields.
+ * Updated: all financial totals are now calculated server‑side.
  */
 
 const Order = require("../models/Order");
@@ -614,9 +614,6 @@ const createOrder = async (req, res) => {
     };
 
     let businessIds = [];
-    let calculatedTotal = 0;
-    let calculatedSubtotal = 0;
-    let calculatedDeliveryFee = 0;
 
     switch (type) {
       case 'business':
@@ -628,35 +625,62 @@ const createOrder = async (req, res) => {
         businessIds = businessResult.businessIds;
         break;
 
-      case 'errand':
-        // Check if new structured data is provided
+      case 'errand': {
+        const baseServiceFee = 3000;
+
         if (errandType && (shoppingErrand || billErrand || documentErrand)) {
+          // New structured data
           orderData.errandType = errandType;
+
           switch (errandType) {
-            case 'shopping':
+            case 'shopping': {
               if (!shoppingErrand) throw new Error('shoppingErrand data missing');
+              const shoppingTotal = shoppingErrand.items.reduce(
+                (sum, item) => sum + (item.price * item.quantity), 0
+              );
+              const shoppingServiceFee = Math.max(shoppingTotal * 0.1, 500);
+              orderData.subtotal = shoppingTotal;
+              orderData.deliveryFee = baseServiceFee + shoppingServiceFee;
+              orderData.total = shoppingTotal + orderData.deliveryFee;
               orderData.shoppingErrand = shoppingErrand;
               break;
-            case 'bill':
+            }
+            case 'bill': {
               if (!billErrand) throw new Error('billErrand data missing');
+              const billAmount = billErrand.amount || 0;
+              orderData.subtotal = billAmount;
+              orderData.deliveryFee = baseServiceFee;
+              orderData.total = billAmount + baseServiceFee;
               orderData.billErrand = billErrand;
               break;
-            case 'document':
+            }
+            case 'document': {
               if (!documentErrand) throw new Error('documentErrand data missing');
+              const { studentStatus, processingMode } = documentErrand;
+              let transcriptFee = 0;
+              if (studentStatus === 'Current') {
+                transcriptFee = processingMode === 'Fast' ? 3000 : 5000;
+              } else { // Past student
+                transcriptFee = processingMode === 'Fast' ? 5000 : 7000;
+              }
+              orderData.subtotal = transcriptFee;
+              orderData.deliveryFee = baseServiceFee;
+              orderData.total = transcriptFee + baseServiceFee;
               orderData.documentErrand = documentErrand;
               break;
+            }
             default:
               throw new Error('Invalid errandType');
           }
-          // For structured data, we trust the frontend's calculated total
-          // Optionally recalc here if needed
         } else if (errandItems && errandItems.length > 0) {
-          // Legacy structure
+          // Legacy structure – keep existing logic
           const validatedErrandItems = validateErrandItems(errandItems);
           orderData.errandItems = validatedErrandItems;
-          calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-          calculatedDeliveryFee = calculatedSubtotal * 0.3; // example
-          calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+          const calculatedSubtotal = validatedErrandItems.reduce(
+            (sum, item) => sum + (item.price * item.quantity), 0
+          );
+          const calculatedDeliveryFee = Math.round(calculatedSubtotal * 0.3); // example
+          const calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
           orderData.subtotal = calculatedSubtotal;
           orderData.deliveryFee = calculatedDeliveryFee;
           orderData.total = calculatedTotal;
@@ -664,8 +688,9 @@ const createOrder = async (req, res) => {
           throw new Error('Errand orders require either legacy errandItems or new structured data');
         }
         break;
+      }
 
-      case 'ticket':
+      case 'ticket': {
         let ticketDetails = {
           busAgency,
           seatNumber,
@@ -701,6 +726,7 @@ const createOrder = async (req, res) => {
         const ticketData = validateTicketBooking(ticketDetails);
         orderData.ticketData = ticketData;
 
+        // Calculate totals
         const seatPriceTotal = ticketData.pricePerSeat * ticketData.seatCount;
         const serviceFee = ticketData.serviceFee;
 
@@ -710,8 +736,9 @@ const createOrder = async (req, res) => {
 
         orderData.notes = '';
         break;
+      }
 
-      case 'random':
+      case 'random': {
         const deliveryData = validateRandomDelivery({
           pickupAddress: pickupAddress || deliveryAddress,
           deliveryAddress: randomDeliveryAddress || deliveryAddress,
@@ -721,28 +748,36 @@ const createOrder = async (req, res) => {
           price: deliveryPrice
         });
         orderData.deliveryData = deliveryData;
-        calculatedSubtotal = deliveryData.price || 0;
-        calculatedDeliveryFee = 1000;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
-        break;
 
-      case 'bulk':
+        // Base fee for random delivery is 1000 XAF
+        const randomBaseFee = 1000;
+        const itemValue = deliveryData.price || 0;
+
+        orderData.subtotal = itemValue;
+        orderData.deliveryFee = randomBaseFee;
+        orderData.total = itemValue + randomBaseFee;
+        break;
+      }
+
+      case 'bulk': {
         const validatedBulkData = validateBulkOrder(bulkData);
         orderData.bulkData = validatedBulkData;
 
         const totalParcels = validatedBulkData.parcels.length;
-        const perParcelFee = 750;
+        const perParcelFee = 750; // fixed per parcel fee
+
         orderData.subtotal = totalParcels * perParcelFee;
-        orderData.deliveryFee = 0;
+        orderData.deliveryFee = 0; // bulk orders have no extra delivery fee
         orderData.total = orderData.subtotal;
 
         if (notes) {
           orderData.notes = notes;
         }
         break;
+      }
+
+      default:
+        throw new Error('Unknown order type');
     }
 
     // Generate order number
@@ -800,7 +835,6 @@ const createOrder = async (req, res) => {
         }));
         break;
       case 'errand':
-        // Include new structured data if present
         if (createdOrder.errandType) {
           responseData.errandType = createdOrder.errandType;
           switch (createdOrder.errandType) {
@@ -815,7 +849,6 @@ const createOrder = async (req, res) => {
               break;
           }
         }
-        // Also include legacy items if present (for backward compatibility)
         if (createdOrder.errandItems && createdOrder.errandItems.length > 0) {
           responseData.errandItems = createdOrder.errandItems;
         }
@@ -868,7 +901,7 @@ const createOrder = async (req, res) => {
 };
 
 // ================================
-// ORDER RETRIEVAL FUNCTIONS (UPDATED FOR NEW ERRAND FIELDS)
+// ORDER RETRIEVAL FUNCTIONS
 // ================================
 
 /**
@@ -1003,7 +1036,7 @@ const getOrderByNumber = async (req, res) => {
   }
 };
 
-// Get user orders - FIXED to include new errand fields
+// Get user orders
 const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id })
@@ -1151,7 +1184,7 @@ const getOrder = async (req, res) => {
   }
 };
 
-// Get all pending orders (for riders/drivers) - UPDATED
+// Get all pending orders (for riders/drivers)
 const getConfirmedOrders = async (req, res) => {
   try {
     console.log('📦 Fetching pending orders...');
@@ -1268,7 +1301,7 @@ const getConfirmedOrders = async (req, res) => {
   }
 };
 
-// Get rider's completed deliveries - UPDATED
+// Get rider's completed deliveries
 const getMyCompletedDeliveries = async (req, res) => {
   try {
     const riderId = req.user._id;
@@ -1641,7 +1674,7 @@ const rejectDelivery = async (req, res) => {
   }
 };
 
-// Get rider's active deliveries - UPDATED
+// Get rider's active deliveries
 const getMyActiveDeliveries = async (req, res) => {
   try {
     const riderId = req.user._id;
@@ -1990,10 +2023,10 @@ const updateOrderStatus = async (req, res) => {
 };
 
 // ================================
-// ADMIN PANEL FUNCTIONS (UPDATED)
+// ADMIN PANEL FUNCTIONS
 // ================================
 
-// Get all orders (for admin panel) - UPDATED
+// Get all orders (for admin panel)
 const getAllOrders = async (req, res) => {
   try {
     console.log('📦 ADMIN - Fetching all orders...');
@@ -2415,17 +2448,37 @@ const createOrderForUser = async (req, res) => {
       case 'errand':
         if (errandType && (shoppingErrand || billErrand || documentErrand)) {
           orderData.errandType = errandType;
+          const baseServiceFee = 3000;
           switch (errandType) {
             case 'shopping':
               if (!shoppingErrand) throw new Error('shoppingErrand data missing');
+              const shoppingTotal = shoppingErrand.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+              const shoppingServiceFee = Math.max(shoppingTotal * 0.1, 500);
+              orderData.subtotal = shoppingTotal;
+              orderData.deliveryFee = baseServiceFee + shoppingServiceFee;
+              orderData.total = shoppingTotal + orderData.deliveryFee;
               orderData.shoppingErrand = shoppingErrand;
               break;
             case 'bill':
               if (!billErrand) throw new Error('billErrand data missing');
+              const billAmount = billErrand.amount || 0;
+              orderData.subtotal = billAmount;
+              orderData.deliveryFee = baseServiceFee;
+              orderData.total = billAmount + baseServiceFee;
               orderData.billErrand = billErrand;
               break;
             case 'document':
               if (!documentErrand) throw new Error('documentErrand data missing');
+              const { studentStatus, processingMode } = documentErrand;
+              let transcriptFee = 0;
+              if (studentStatus === 'Current') {
+                transcriptFee = processingMode === 'Fast' ? 3000 : 5000;
+              } else {
+                transcriptFee = processingMode === 'Fast' ? 5000 : 7000;
+              }
+              orderData.subtotal = transcriptFee;
+              orderData.deliveryFee = baseServiceFee;
+              orderData.total = transcriptFee + baseServiceFee;
               orderData.documentErrand = documentErrand;
               break;
             default:
@@ -2434,9 +2487,9 @@ const createOrderForUser = async (req, res) => {
         } else if (errandItems && errandItems.length > 0) {
           const validatedErrandItems = validateErrandItems(errandItems);
           orderData.errandItems = validatedErrandItems;
-          calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-          calculatedDeliveryFee = 1000;
-          calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+          const calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+          const calculatedDeliveryFee = Math.round(calculatedSubtotal * 0.3);
+          const calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
           orderData.subtotal = calculatedSubtotal;
           orderData.deliveryFee = calculatedDeliveryFee;
           orderData.total = calculatedTotal;
@@ -2450,12 +2503,11 @@ const createOrderForUser = async (req, res) => {
           busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
         });
         orderData.ticketData = ticketData;
-        calculatedSubtotal = ticketData.price || 5000;
-        calculatedDeliveryFee = 1000;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
+        const seatPriceTotal = ticketData.pricePerSeat * ticketData.seatCount;
+        const serviceFee = ticketData.serviceFee;
+        orderData.subtotal = seatPriceTotal;
+        orderData.deliveryFee = serviceFee;
+        orderData.total = seatPriceTotal + serviceFee;
         break;
 
       case 'random':
@@ -2468,12 +2520,11 @@ const createOrderForUser = async (req, res) => {
           price: deliveryPrice
         });
         orderData.deliveryData = deliveryData;
-        calculatedSubtotal = deliveryData.price || 2000;
-        calculatedDeliveryFee = 1000;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
+        const randomBaseFee = 1000;
+        const itemValue = deliveryData.price || 0;
+        orderData.subtotal = itemValue;
+        orderData.deliveryFee = randomBaseFee;
+        orderData.total = itemValue + randomBaseFee;
         break;
     }
 
@@ -2596,7 +2647,7 @@ const createOrderForUser = async (req, res) => {
   }
 };
 
-// Get rider orders (admin only) - UPDATED
+// Get rider orders (admin only)
 const getRiderOrders = async (req, res) => {
   try {
     const { riderId } = req.params;
@@ -2855,7 +2906,7 @@ const getRiderOrders = async (req, res) => {
   }
 };
 
-// Get orders by business ID (for business owners) - UPDATED (though errand orders may not be relevant for businesses)
+// Get orders by business ID
 const getOrdersByBusiness = async (req, res) => {
   try {
     const { businessId } = req.params;
