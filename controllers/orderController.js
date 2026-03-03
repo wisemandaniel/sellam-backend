@@ -1,6 +1,7 @@
 /**
  * controllers/orderController.js
  * Full delivery/order logic with all route handlers.
+ * Updated to support new structured errand fields.
  */
 
 const Order = require("../models/Order");
@@ -39,7 +40,7 @@ const formatPrice = (price) => {
 // ORDER TYPE VALIDATION FUNCTIONS
 // ================================
 
-// Validate errand items
+// Validate errand items (legacy)
 const validateErrandItems = (items) => {
   if (!items || items.length === 0) {
     throw new Error("Errand must have at least one item");
@@ -66,12 +67,10 @@ const validateErrandItems = (items) => {
 
 // Validate ticket booking
 const validateTicketBooking = (data) => {
-  // Required fields (must be present)
   if (!data.busAgency || !data.seatNumber || !data.passengerName || !data.departureTime || !data.destination || !data.departureCity) {
     throw new Error('Missing required ticket booking fields: busAgency, seatNumber, passengerName, departureTime, destination, departureCity');
   }
 
-  // Return the data as is (with defaults for missing optional fields)
   return {
     busAgency: data.busAgency,
     seatNumber: data.seatNumber,
@@ -94,7 +93,6 @@ const validateTicketBooking = (data) => {
 
 // Validate random delivery
 const validateRandomDelivery = (deliveryData) => {
-  // 🔍 LOG THE INCOMING DATA
   console.log('🔍 validateRandomDelivery received:', JSON.stringify(deliveryData, null, 2));
 
   const { pickupAddress, deliveryAddress, senderNumber, receiverNumber, itemDescription } = deliveryData;
@@ -125,7 +123,7 @@ const validateRandomDelivery = (deliveryData) => {
   };
 };
 
-// Validate business order (FIXED - business is in product schema)
+// Validate business order
 const validateBusinessOrder = async (items) => {
   if (!items || items.length === 0) {
     throw new Error("No items in order");
@@ -137,7 +135,6 @@ const validateBusinessOrder = async (items) => {
   const businessIds = new Set();
 
   for (const item of items) {
-    // FIX: Populate business from product
     const product = await Product.findById(item.product).populate("business");
 
     if (!product) {
@@ -148,7 +145,6 @@ const validateBusinessOrder = async (items) => {
       throw new Error(`${product.name} is out of stock`);
     }
 
-    // FIX: Check if product has a business associated
     if (!product.business) {
       throw new Error(`Product ${product.name} is not associated with any business`);
     }
@@ -160,7 +156,6 @@ const validateBusinessOrder = async (items) => {
     const itemTotal = price * item.quantity;
     subtotal += itemTotal;
 
-    // FIX: Use business from product
     const businessId = product.business._id.toString();
     businessIds.add(businessId);
 
@@ -170,17 +165,13 @@ const validateBusinessOrder = async (items) => {
 
     orderItems.push({
       product: product._id,
-      // FIX: Store business reference in order item
       business: product.business._id,
       quantity: item.quantity,
       price: price,
     });
   }
 
-  // Calculate delivery fee
-  const totalBusinessDeliveryFees = Array.from(
-    businessDeliveryFees.values()
-  ).reduce((sum, fee) => sum + fee, 0);
+  const totalBusinessDeliveryFees = Array.from(businessDeliveryFees.values()).reduce((sum, fee) => sum + fee, 0);
   const deliveryFee = Math.round(totalBusinessDeliveryFees);
   const total = subtotal + deliveryFee;
 
@@ -195,9 +186,6 @@ const validateBusinessOrder = async (items) => {
 
 /**
  * Validate bulk order data
- * @param {Object} bulkData - The bulkData object from frontend
- * @returns {Object} - Validated and cleaned bulkData
- * @throws {Error} - If validation fails
  */
 const validateBulkOrder = (bulkData) => {
   if (!bulkData) {
@@ -206,12 +194,10 @@ const validateBulkOrder = (bulkData) => {
 
   const { type, parcels, scheduledDate, scheduledTime } = bulkData;
 
-  // Validate type
   if (!type || !['pickup', 'delivery'].includes(type)) {
     throw new Error('Bulk type must be either "pickup" or "delivery"');
   }
 
-  // Validate scheduled date and time
   if (!scheduledDate) {
     throw new Error('Scheduled date is required');
   }
@@ -219,12 +205,10 @@ const validateBulkOrder = (bulkData) => {
     throw new Error('Scheduled time is required');
   }
 
-  // Validate parcels
   if (!parcels || !Array.isArray(parcels) || parcels.length < 2) {
     throw new Error('At least 2 parcels are required for bulk service');
   }
 
-  // Validate each parcel
   parcels.forEach((parcel, index) => {
     if (!parcel.description || parcel.description.trim() === '') {
       throw new Error(`Parcel ${index + 1}: description is required`);
@@ -240,7 +224,7 @@ const validateBulkOrder = (bulkData) => {
       if (!parcel.pickupContactPhone || parcel.pickupContactPhone.trim() === '') {
         throw new Error(`Parcel ${index + 1}: sender phone is required`);
       }
-    } else { // delivery
+    } else {
       if (!parcel.deliveryAddress || parcel.deliveryAddress.trim() === '') {
         throw new Error(`Parcel ${index + 1}: delivery address is required`);
       }
@@ -253,7 +237,6 @@ const validateBulkOrder = (bulkData) => {
     }
   });
 
-  // Validate common receiver/pickup details based on type
   if (type === 'pickup') {
     if (!bulkData.receiverName || bulkData.receiverName.trim() === '') {
       throw new Error('Receiver name is required for bulk pickup');
@@ -264,7 +247,7 @@ const validateBulkOrder = (bulkData) => {
     if (!bulkData.receiverAddress || bulkData.receiverAddress.trim() === '') {
       throw new Error('Receiver address is required for bulk pickup');
     }
-  } else { // delivery
+  } else {
     if (!bulkData.pickupContactName || bulkData.pickupContactName.trim() === '') {
       throw new Error('Pickup contact name is required for bulk delivery');
     }
@@ -276,7 +259,6 @@ const validateBulkOrder = (bulkData) => {
     }
   }
 
-  // Return validated data (you may also want to sanitize strings)
   return {
     type,
     parcels: parcels.map(p => ({
@@ -308,7 +290,6 @@ const validateBulkOrder = (bulkData) => {
 // WHATSAPP TEMPLATE FUNCTIONALITY
 // ================================
 
-// Template 1: Order Notification (5 variables - PRIVACY COMPLIANT)
 const sendWhatsAppTemplate = async (order, businessIds) => {
   if (!twilioClient || !process.env.WHATSAPP_TEMPLATE_SID) {
     console.log("⚠️ WhatsApp templates not configured");
@@ -342,7 +323,6 @@ const sendWhatsAppTemplate = async (order, businessIds) => {
         continue;
       }
 
-      // Format items list
       const itemsList = businessItems
         .map((item) => `${item.quantity}x ${item.product.name}`)
         .join(", ");
@@ -352,13 +332,12 @@ const sendWhatsAppTemplate = async (order, businessIds) => {
         0
       );
 
-      // Template variables (NO CUSTOMER PHONE - Privacy compliant)
       const contentVariables = {
-        1: order.orderNumber, // Order number
-        2: order.user?.name || "Customer", // Customer name (no phone)
-        3: itemsList, // Items list
-        4: formatPrice(businessSubtotal), // Total amount
-        5: order.deliveryAddress, // Delivery address
+        1: order.orderNumber,
+        2: order.user?.name || "Customer",
+        3: itemsList,
+        4: formatPrice(businessSubtotal),
+        5: order.deliveryAddress,
       };
 
       try {
@@ -401,7 +380,6 @@ const sendWhatsAppTemplate = async (order, businessIds) => {
   }
 };
 
-// WhatsApp URL fallback (when templates fail)
 const generateWhatsAppURLs = async (order, businessIds) => {
   console.log("\n🔗 ========== WHATSAPP URL NOTIFICATIONS ==========");
   console.log("📱 PRIVACY: Customer phone numbers excluded");
@@ -432,7 +410,6 @@ const generateWhatsAppURLs = async (order, businessIds) => {
       return;
     }
 
-    // Format items with prices
     const itemsList = businessItems
       .map(
         (item) =>
@@ -447,7 +424,6 @@ const generateWhatsAppURLs = async (order, businessIds) => {
       0
     );
 
-    // Message WITHOUT customer phone (Privacy compliant)
     const message =
       `NEW ORDER RECEIVED%0A%0A` +
       `Order Number: ${order.orderNumber}%0A` +
@@ -483,11 +459,9 @@ const generateWhatsAppURLs = async (order, businessIds) => {
   return urlCount;
 };
 
-// Hybrid notification system (templates + fallback)
 const sendStoreNotifications = async (order, businessIds) => {
   console.log("\n🎯 ========== BUSINESS NOTIFICATIONS ==========");
 
-  // Try templates first
   const templateResult = await sendWhatsAppTemplate(order, businessIds);
 
   if (!templateResult.success || templateResult.sentCount === 0) {
@@ -507,7 +481,6 @@ const sendStoreNotifications = async (order, businessIds) => {
   };
 };
 
-// Send order notifications based on type
 const sendOrderNotifications = async (order) => {
   try {
     console.log(`📱 Sending notifications for ${order.type} order ${order.orderNumber}`);
@@ -516,7 +489,6 @@ const sendOrderNotifications = async (order) => {
 
     switch (order.type) {
       case 'business':
-        // Notify businesses about their products
         const businessIds = [...new Set(order.items.map(item => item.business?.toString()).filter(Boolean))];
         if (businessIds.length > 0) {
           notificationResult = await sendStoreNotifications(order, businessIds);
@@ -524,12 +496,11 @@ const sendOrderNotifications = async (order) => {
         break;
 
       case 'errand':
-        // For errands, notify admin about new errand request
         const errandMessage = `
 NEW ERRAND REQUEST
 Order: ${order.orderNumber}
 Customer: ${order.user?.name || 'Customer'}
-Items: ${order.errandItems.map(item => `${item.quantity}x ${item.name} - ${formatPrice(item.price)}`).join(', ')}
+Items: ${order.errandItems?.map(item => `${item.quantity}x ${item.name} - ${formatPrice(item.price)}`).join(', ') || 'Structured data (see order)'}
 Total: ${formatPrice(order.total)}
 Delivery: ${order.deliveryAddress}
 Phone: ${order.phone}
@@ -539,7 +510,6 @@ Phone: ${order.phone}
         break;
 
       case 'ticket':
-        // For tickets, notify ticket agencies or admin
         const ticketMessage = `
 NEW TICKET BOOKING
 Order: ${order.orderNumber}
@@ -548,7 +518,6 @@ Destination: ${order.ticketData.destination}
 Seat: ${order.ticketData.seatNumber}
 Departure: ${order.ticketData.departureTime}
 Customer: ${order.user?.name || 'Customer'}
-ID: ${order.ticketData.idCard}
 Phone: ${order.phone}
         `.trim();
         console.log('🎟️ Ticket Details:', ticketMessage);
@@ -556,7 +525,6 @@ Phone: ${order.phone}
         break;
 
       case 'random':
-        // For random delivery, notify available delivery riders
         const deliveryMessage = `
 NEW RANDOM DELIVERY
 Order: ${order.orderNumber}
@@ -581,10 +549,9 @@ Phone: ${order.phone}
 };
 
 // ================================
-// ORDER CREATION - ALL TYPES
+// ORDER CREATION - ALL TYPES (UPDATED)
 // ================================
 
-// Create new order (supports all types)
 const createOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -596,22 +563,20 @@ const createOrder = async (req, res) => {
       deliveryAddress, 
       phone, 
       notes,
+      // Legacy errand
       errandItems,
-      busAgency, 
-      seatNumber, 
-      idCard, 
-      departureTime, 
-      travelTimeOfDay,
-      destination, 
-      ticketPrice,
-      pickupAddress, 
-      deliveryAddress: randomDeliveryAddress, 
-      senderNumber, 
-      receiverNumber, 
-      itemDescription, 
-      deliveryPrice, 
-      departureCity,
-      bulkData  // NEW: bulk order data
+      // New structured errand fields
+      errandType,
+      shoppingErrand,
+      billErrand,
+      documentErrand,
+      // Ticket fields
+      busAgency, seatNumber, idCard, departureTime, travelTimeOfDay,
+      destination, ticketPrice, departureCity,
+      // Random delivery fields
+      pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice,
+      // Bulk data
+      bulkData
     } = req.body;
 
     console.log('📥 Incoming createOrder request body:', JSON.stringify(req.body, null, 2));
@@ -624,7 +589,6 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // Updated enum to include 'bulk'
     if (!['business', 'errand', 'ticket', 'random', 'bulk'].includes(type)) {
       await session.abortTransaction();
       return res.status(400).json({
@@ -665,29 +629,53 @@ const createOrder = async (req, res) => {
         break;
 
       case 'errand':
-        const validatedErrandItems = validateErrandItems(errandItems);
-        orderData.errandItems = validatedErrandItems;
-        calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        calculatedDeliveryFee = calculatedSubtotal * 0.3;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
+        // Check if new structured data is provided
+        if (errandType && (shoppingErrand || billErrand || documentErrand)) {
+          orderData.errandType = errandType;
+          switch (errandType) {
+            case 'shopping':
+              if (!shoppingErrand) throw new Error('shoppingErrand data missing');
+              orderData.shoppingErrand = shoppingErrand;
+              break;
+            case 'bill':
+              if (!billErrand) throw new Error('billErrand data missing');
+              orderData.billErrand = billErrand;
+              break;
+            case 'document':
+              if (!documentErrand) throw new Error('documentErrand data missing');
+              orderData.documentErrand = documentErrand;
+              break;
+            default:
+              throw new Error('Invalid errandType');
+          }
+          // For structured data, we trust the frontend's calculated total
+          // Optionally recalc here if needed
+        } else if (errandItems && errandItems.length > 0) {
+          // Legacy structure
+          const validatedErrandItems = validateErrandItems(errandItems);
+          orderData.errandItems = validatedErrandItems;
+          calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+          calculatedDeliveryFee = calculatedSubtotal * 0.3; // example
+          calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+          orderData.subtotal = calculatedSubtotal;
+          orderData.deliveryFee = calculatedDeliveryFee;
+          orderData.total = calculatedTotal;
+        } else {
+          throw new Error('Errand orders require either legacy errandItems or new structured data');
+        }
         break;
 
       case 'ticket':
-        // Base ticket details from request body
         let ticketDetails = {
           busAgency,
           seatNumber,
-          passengerName: idCard,   // map idCard to passengerName
+          passengerName: idCard,
           departureTime,
           destination,
           departureCity,
           price: ticketPrice,
         };
 
-        // Parse notes if it contains a JSON string
         let parsedNotes = {};
         if (notes && typeof notes === 'string' && notes.trim().startsWith('{')) {
           try {
@@ -697,7 +685,6 @@ const createOrder = async (req, res) => {
           }
         }
 
-        // Extend ticketDetails with parsed data
         ticketDetails = {
           ...ticketDetails,
           backupSeats: parsedNotes.backupSeats || [],
@@ -711,11 +698,9 @@ const createOrder = async (req, res) => {
           seatCount: parsedNotes.seatCount || (seatNumber ? seatNumber.split(',').length : 0)
         };
 
-        // Validate the complete ticket data
         const ticketData = validateTicketBooking(ticketDetails);
         orderData.ticketData = ticketData;
 
-        // Calculate financials
         const seatPriceTotal = ticketData.pricePerSeat * ticketData.seatCount;
         const serviceFee = ticketData.serviceFee;
 
@@ -723,9 +708,7 @@ const createOrder = async (req, res) => {
         orderData.deliveryFee = serviceFee;
         orderData.total = seatPriceTotal + serviceFee;
 
-        // Clear notes because we've extracted all data into ticketData
         orderData.notes = '';
-
         break;
 
       case 'random':
@@ -746,22 +729,18 @@ const createOrder = async (req, res) => {
         orderData.total = calculatedTotal;
         break;
 
-      // ============= NEW: BULK ORDER CASE =============
       case 'bulk':
-        // Validate bulkData
         const validatedBulkData = validateBulkOrder(bulkData);
         orderData.bulkData = validatedBulkData;
 
-        // Calculate financials: 750 per parcel, no extra delivery fee
         const totalParcels = validatedBulkData.parcels.length;
         const perParcelFee = 750;
         orderData.subtotal = totalParcels * perParcelFee;
         orderData.deliveryFee = 0;
         orderData.total = orderData.subtotal;
 
-        // Optionally, parse notes if any extra info was sent
         if (notes) {
-          orderData.notes = notes; // keep original notes if any
+          orderData.notes = notes;
         }
         break;
     }
@@ -778,7 +757,6 @@ const createOrder = async (req, res) => {
 
     console.log('✅ Order created successfully:', createdOrder._id);
 
-    // Populate order data
     await createdOrder.populate('user', 'name phone');
     
     if (type === 'business') {
@@ -792,7 +770,6 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // Send notifications (non-blocking)
     const notificationResult = await sendOrderNotifications(createdOrder);
 
     await session.commitTransaction();
@@ -823,7 +800,25 @@ const createOrder = async (req, res) => {
         }));
         break;
       case 'errand':
-        responseData.errandItems = createdOrder.errandItems;
+        // Include new structured data if present
+        if (createdOrder.errandType) {
+          responseData.errandType = createdOrder.errandType;
+          switch (createdOrder.errandType) {
+            case 'shopping':
+              responseData.shoppingErrand = createdOrder.shoppingErrand;
+              break;
+            case 'bill':
+              responseData.billErrand = createdOrder.billErrand;
+              break;
+            case 'document':
+              responseData.documentErrand = createdOrder.documentErrand;
+              break;
+          }
+        }
+        // Also include legacy items if present (for backward compatibility)
+        if (createdOrder.errandItems && createdOrder.errandItems.length > 0) {
+          responseData.errandItems = createdOrder.errandItems;
+        }
         break;
       case 'ticket':
         responseData.ticketData = createdOrder.ticketData;
@@ -872,6 +867,10 @@ const createOrder = async (req, res) => {
   }
 };
 
+// ================================
+// ORDER RETRIEVAL FUNCTIONS (UPDATED FOR NEW ERRAND FIELDS)
+// ================================
+
 /**
  * Get order by order number – includes full status history
  */
@@ -890,7 +889,6 @@ const getOrderByNumber = async (req, res) => {
       });
     }
 
-    // Build status history array
     const statusHistory = [];
 
     const addEvent = (status, timestamp) => {
@@ -906,7 +904,7 @@ const getOrderByNumber = async (req, res) => {
     const getStatusDescription = (status) => {
       const descriptions = {
         pending: 'Order placed and awaiting confirmation',
-        confirmed: 'Order confirmed',                   // ✅ new
+        confirmed: 'Order confirmed',
         accepted: 'Order accepted by a driver',
         picked_up: 'Driver has picked up the parcel',
         delivered: 'Parcel delivered successfully',
@@ -917,7 +915,7 @@ const getOrderByNumber = async (req, res) => {
     };
 
     addEvent('pending', order.createdAt);
-    addEvent('confirmed', order.confirmedAt);            // ✅ new
+    addEvent('confirmed', order.confirmedAt);
     addEvent('accepted', order.acceptedAt);
     addEvent('picked_up', order.pickedUpAt);
     addEvent('delivered', order.deliveredAt);
@@ -936,9 +934,8 @@ const getOrderByNumber = async (req, res) => {
       deliveryAddress: order.deliveryAddress,
       phone: order.phone,
       notes: order.notes,
-      travelTimeOfDay: order.travelTimeOfDay,
       createdAt: order.createdAt,
-      confirmedAt: order.confirmedAt,                     // ✅ include in response
+      confirmedAt: order.confirmedAt,
       rider: order.rider ? {
         name: order.rider.name,
         phone: order.rider.phone,
@@ -950,7 +947,6 @@ const getOrderByNumber = async (req, res) => {
       paymentStatus: order.paymentStatus
     };
 
-    // Add type-specific data (unchanged)
     switch (order.type) {
       case 'business':
         responseData.items = order.items.map((item) => ({
@@ -964,7 +960,23 @@ const getOrderByNumber = async (req, res) => {
         }));
         break;
       case 'errand':
-        responseData.errandItems = order.errandItems;
+        if (order.errandType) {
+          responseData.errandType = order.errandType;
+          switch (order.errandType) {
+            case 'shopping':
+              responseData.shoppingErrand = order.shoppingErrand;
+              break;
+            case 'bill':
+              responseData.billErrand = order.billErrand;
+              break;
+            case 'document':
+              responseData.documentErrand = order.documentErrand;
+              break;
+          }
+        }
+        if (order.errandItems && order.errandItems.length > 0) {
+          responseData.errandItems = order.errandItems;
+        }
         break;
       case 'ticket':
         responseData.ticketData = order.ticketData;
@@ -991,392 +1003,7 @@ const getOrderByNumber = async (req, res) => {
   }
 };
 
-/**
- * @desc    Cancel an order (customer only) - using orderNumber
- * @route   PATCH /api/orders/order-number/:orderNumber/cancel
- * @access  Private (order owner)
- */
-const cancelOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { orderNumber } = req.params;
-    const userId = req.user._id;
-
-    // Find the order by orderNumber and ensure it belongs to the authenticated user
-    const order = await Order.findOne({
-      orderNumber: orderNumber,
-      user: userId,
-    }).session(session);
-
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found or you are not authorized',
-      });
-    }
-
-    // Only allow cancellation if order is still pending
-    if (order.status !== 'pending') {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot cancel order in "${order.status}" status. Only pending orders can be cancelled.`,
-      });
-    }
-
-    // Update order status to cancelled
-    order.status = 'cancelled';
-    order.cancelledAt = new Date();
-    await order.save({ session });
-
-    await session.commitTransaction();
-
-    res.json({
-      success: true,
-      data: {
-        orderNumber: order.orderNumber,
-        status: order.status,
-        cancelledAt: order.cancelledAt,
-      },
-      message: 'Order cancelled successfully',
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    console.error('❌ Cancel order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to cancel order',
-      error: error.message,
-    });
-  } finally {
-    session.endSession();
-  }
-};
-
-/**
- * @desc    Delete an order (customer only) - using orderNumber
- * @route   DELETE /api/orders/order-number/:orderNumber
- * @access  Private (order owner)
- */
-const deleteMyOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { orderNumber } = req.params;
-    const userId = req.user._id;
-
-    console.log('orderNumber:::', orderNumber);
-    
-
-    // Find order by orderNumber and ensure it belongs to the user
-    const order = await Order.findOne({
-      orderNumber: orderNumber,
-      user: userId,
-    }).session(session);
-
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found or you are not authorized',
-      });
-    }
-
-    // Only allow deletion if order is cancelled or still pending
-    if (!['cancelled', 'pending'].includes(order.status)) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete order in "${order.status}" status. Only cancelled or pending orders can be deleted.`,
-      });
-    }
-
-    await Order.deleteOne({ _id: order._id }).session(session);
-    await session.commitTransaction();
-
-    res.json({
-      success: true,
-      message: 'Order deleted successfully',
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    console.error('❌ Delete order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete order',
-      error: error.message,
-    });
-  } finally {
-    session.endSession();
-  }
-};
-
-// @desc    Create order for user (admin only)
-// @route   POST /api/orders/admin/create
-// @access  Private/Admin
-const createOrderForUser = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { 
-      userId,
-      type = 'business',
-      items, 
-      deliveryAddress, 
-      phone, 
-      notes,
-      // Errand specific
-      errandItems,
-      // Ticket specific
-      busAgency, seatNumber, idCard, departureTime, destination, ticketPrice,
-      // Random delivery specific
-      pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
-    } = req.body;
-
-    // Validate admin permissions
-    if (req.user.role !== 'admin') {
-      await session.abortTransaction();
-      return res.status(403).json({
-        success: false,
-        message: "Access denied. Admin privileges required."
-      });
-    }
-
-    // Validate required fields
-    if (!userId) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required to create order on behalf of user"
-      });
-    }
-
-    if (!['business', 'errand', 'ticket', 'random'].includes(type)) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: "Valid order type is required (business, errand, ticket, random)"
-      });
-    }
-
-    if (!deliveryAddress || !phone) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: "Delivery address and phone are required",
-      });
-    }
-
-    // Verify user exists
-    const user = await User.findById(userId);
-    if (!user) {
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
-    let orderData = {
-      user: userId,
-      type,
-      deliveryAddress,
-      phone,
-      notes: notes || "",
-      createdBy: req.user._id,
-      isAdminCreated: true
-    };
-
-    let businessIds = [];
-    let calculatedTotal = 0;
-    let calculatedSubtotal = 0;
-    let calculatedDeliveryFee = 0;
-
-    // Process based on order type
-    switch (type) {
-      case 'business':
-        if (!items || items.length === 0) {
-          await session.abortTransaction();
-          return res.status(400).json({
-            success: false,
-            message: "No items in order",
-          });
-        }
-
-        const businessResult = await validateBusinessOrder(items);
-        orderData.items = businessResult.orderItems;
-        orderData.subtotal = businessResult.subtotal;
-        orderData.deliveryFee = businessResult.deliveryFee;
-        orderData.total = businessResult.total;
-        businessIds = businessResult.businessIds;
-        break;
-
-      case 'errand':
-        const validatedErrandItems = validateErrandItems(errandItems);
-        orderData.errandItems = validatedErrandItems;
-        
-        calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        calculatedDeliveryFee = 1000;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
-        break;
-
-      case 'ticket':
-        const ticketData = validateTicketBooking({
-          busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
-        });
-        orderData.ticketData = ticketData;
-        
-        calculatedSubtotal = ticketData.price || 5000;
-        calculatedDeliveryFee = 1000;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
-        break;
-
-      case 'random':
-        const deliveryData = validateRandomDelivery({
-          pickupAddress: pickupAddress || deliveryAddress,
-          deliveryAddress: randomDeliveryAddress || deliveryAddress,
-          senderNumber,
-          receiverNumber,
-          itemDescription,
-          price: deliveryPrice
-        });
-        orderData.deliveryData = deliveryData;
-        
-        calculatedSubtotal = deliveryData.price || 2000;
-        calculatedDeliveryFee = 1000;
-        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
-        
-        orderData.subtotal = calculatedSubtotal;
-        orderData.deliveryFee = calculatedDeliveryFee;
-        orderData.total = calculatedTotal;
-        break;
-    }
-
-    // Generate order number
-    const orderNumber = await generateOrderNumber();
-    orderData.orderNumber = orderNumber;
-
-    // Create order
-    const order = await Order.create([orderData], { session });
-    const createdOrder = order[0];
-
-    // Populate order data
-    await createdOrder.populate('user', 'name phone email');
-    
-    if (type === 'business') {
-      // FIX: Populate product and then business from product
-      await createdOrder.populate({
-        path: "items.product",
-        select: "name images price featuredImage business",
-        populate: {
-          path: "business",
-          select: "name deliveryTime phone address"
-        }
-      });
-    }
-
-    // Send notifications
-    const notificationResult = await sendOrderNotifications(createdOrder);
-
-    await session.commitTransaction();
-
-    // Format response
-    let responseData = {
-      orderNumber: createdOrder.orderNumber,
-      type: createdOrder.type,
-      status: createdOrder.status,
-      total: createdOrder.total,
-      deliveryFee: createdOrder.deliveryFee,
-      subtotal: createdOrder.subtotal,
-      customer: {
-        name: createdOrder.user.name,
-        phone: createdOrder.user.phone,
-        email: createdOrder.user.email
-      },
-      deliveryAddress: createdOrder.deliveryAddress,
-      phone: createdOrder.phone,
-      notes: createdOrder.notes,
-      createdAt: createdOrder.createdAt,
-      createdBy: 'admin'
-    };
-
-    // Add type-specific data
-    switch (type) {
-      case 'business':
-        responseData.items = createdOrder.items.map((item) => ({
-          name: item.product.name,
-          images: item.product.images || [],
-          featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
-          price: item.price,
-          quantity: item.quantity,
-          // FIX: Get business from product.business
-          business: item.product.business?.name || 'Business not found',
-          deliveryTime: item.product.business?.deliveryTime || 'N/A',
-        }));
-        break;
-
-      case 'errand':
-        responseData.errandItems = createdOrder.errandItems;
-        break;
-
-      case 'ticket':
-        responseData.ticketData = createdOrder.ticketData;
-        break;
-
-      case 'random':
-        responseData.deliveryData = createdOrder.deliveryData;
-        break;
-    }
-
-    res.status(201).json({
-      success: true,
-      data: responseData,
-      notifications: notificationResult,
-      message: `${type.charAt(0).toUpperCase() + type.slice(1)} order created successfully for user!`,
-    });
-
-  } catch (error) {
-    await session.abortTransaction();
-    console.error("Admin order creation error:", error);
-
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: "Order number conflict. Please try again.",
-      });
-    }
-
-    if (error.name === 'ValidationError' || error.message.includes('required')) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Server error creating order for user",
-      error: error.message,
-    });
-  } finally {
-    session.endSession();
-  }
-};
-
-// Get user orders - FIXED to include bulkData and all fields
+// Get user orders - FIXED to include new errand fields
 const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id })
@@ -1388,8 +1015,7 @@ const getMyOrders = async (req, res) => {
           select: 'name deliveryTime'
         }
       })
-      // ADDED: bulkData to the select
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt deliveredAt paymentStatus paymentMethod')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt deliveredAt paymentStatus paymentMethod')
       .sort({ createdAt: -1 });
 
     const formattedOrders = orders.map(order => {
@@ -1400,9 +1026,8 @@ const getMyOrders = async (req, res) => {
         total: order.total,
         deliveryFee: order.deliveryFee,
         subtotal: order.subtotal,
-        // FIX: Add payment fields to response
-        paymentStatus: order.paymentStatus || 'unpaid', // Default to unpaid if not set
-        paymentMethod: order.paymentMethod || 'cash',   // Default to cash if not set
+        paymentStatus: order.paymentStatus || 'unpaid',
+        paymentMethod: order.paymentMethod || 'cash',
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
         notes: order.notes,
@@ -1411,7 +1036,6 @@ const getMyOrders = async (req, res) => {
         createdAt: order.createdAt
       };
 
-      // Add type-specific data
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
@@ -1420,14 +1044,29 @@ const getMyOrders = async (req, res) => {
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
             price: item.price,
             quantity: item.quantity,
-            // FIX: Get business from product.business
             business: item.product?.business?.name || 'Business not found',
             deliveryTime: item.product?.business?.deliveryTime || 'N/A'
           }));
           break;
 
         case 'errand':
-          baseOrder.errandItems = order.errandItems;
+          if (order.errandType) {
+            baseOrder.errandType = order.errandType;
+            switch (order.errandType) {
+              case 'shopping':
+                baseOrder.shoppingErrand = order.shoppingErrand;
+                break;
+              case 'bill':
+                baseOrder.billErrand = order.billErrand;
+                break;
+              case 'document':
+                baseOrder.documentErrand = order.documentErrand;
+                break;
+            }
+          }
+          if (order.errandItems && order.errandItems.length > 0) {
+            baseOrder.errandItems = order.errandItems;
+          }
           break;
 
         case 'ticket':
@@ -1438,7 +1077,6 @@ const getMyOrders = async (req, res) => {
           baseOrder.deliveryData = order.deliveryData;
           break;
 
-        // ADDED: bulk case
         case 'bulk':
           baseOrder.bulkData = order.bulkData;
           break;
@@ -1447,7 +1085,6 @@ const getMyOrders = async (req, res) => {
       return baseOrder;
     });
 
-    // Debug log to verify payment status is being returned
     console.log('✅ getMyOrders - Payment status check:');
     formattedOrders.forEach(order => {
       console.log(`   Order ${order.orderNumber}: paymentStatus = ${order.paymentStatus}, paymentMethod = ${order.paymentMethod}`);
@@ -1466,7 +1103,7 @@ const getMyOrders = async (req, res) => {
   }
 };
 
-// Get single order
+// Get single order (by ID)
 const getOrder = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
@@ -1488,7 +1125,6 @@ const getOrder = async (req, res) => {
       });
     }
     
-    // Format the response to include type-specific data
     const formattedOrder = {
       ...order.toObject(),
       items: order.type === 'business' ? order.items.map(item => ({
@@ -1515,7 +1151,7 @@ const getOrder = async (req, res) => {
   }
 };
 
-// Get all pending orders (for riders/drivers)
+// Get all pending orders (for riders/drivers) - UPDATED
 const getConfirmedOrders = async (req, res) => {
   try {
     console.log('📦 Fetching pending orders...');
@@ -1533,8 +1169,7 @@ const getConfirmedOrders = async (req, res) => {
           select: 'name phone address deliveryTime coordinates'
         }
       })
-      // ADDED: bulkData to select
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt updatedAt')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt updatedAt')
       .sort({ createdAt: -1 });
 
     console.log(`✅ Found ${pendingOrders.length} pending orders`);
@@ -1559,7 +1194,6 @@ const getConfirmedOrders = async (req, res) => {
         updatedAt: order.updatedAt
       };
 
-      // Add type-specific items
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
@@ -1579,7 +1213,23 @@ const getConfirmedOrders = async (req, res) => {
           break;
 
         case 'errand':
-          baseOrder.errandItems = order.errandItems;
+          if (order.errandType) {
+            baseOrder.errandType = order.errandType;
+            switch (order.errandType) {
+              case 'shopping':
+                baseOrder.shoppingErrand = order.shoppingErrand;
+                break;
+              case 'bill':
+                baseOrder.billErrand = order.billErrand;
+                break;
+              case 'document':
+                baseOrder.documentErrand = order.documentErrand;
+                break;
+            }
+          }
+          if (order.errandItems && order.errandItems.length > 0) {
+            baseOrder.errandItems = order.errandItems;
+          }
           break;
 
         case 'ticket':
@@ -1588,13 +1238,11 @@ const getConfirmedOrders = async (req, res) => {
 
         case 'random':
           baseOrder.deliveryData = order.deliveryData;
-          // Also include pickup address for random deliveries
           if (order.deliveryData?.pickupAddress) {
             baseOrder.pickupAddress = order.deliveryData.pickupAddress;
           }
           break;
 
-        // ADDED: bulk case
         case 'bulk':
           baseOrder.bulkData = order.bulkData;
           break;
@@ -1620,7 +1268,7 @@ const getConfirmedOrders = async (req, res) => {
   }
 };
 
-// [NEW] Get rider's completed deliveries
+// Get rider's completed deliveries - UPDATED
 const getMyCompletedDeliveries = async (req, res) => {
   try {
     const riderId = req.user._id;
@@ -1640,8 +1288,7 @@ const getMyCompletedDeliveries = async (req, res) => {
         select: 'name address deliveryTime coordinates phone'
       }
     })
-    // ADDED: bulkData to select
-    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
+    .select('orderNumber type status total deliveryFee items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ deliveredAt: -1 })
     .lean();
 
@@ -1668,7 +1315,6 @@ const getMyCompletedDeliveries = async (req, res) => {
         createdAt: order.createdAt
       };
 
-      // Add type-specific items
       switch (order.type) {
         case 'business':
           baseDelivery.items = order.items.map(item => ({
@@ -1688,7 +1334,23 @@ const getMyCompletedDeliveries = async (req, res) => {
           break;
 
         case 'errand':
-          baseDelivery.errandItems = order.errandItems;
+          if (order.errandType) {
+            baseDelivery.errandType = order.errandType;
+            switch (order.errandType) {
+              case 'shopping':
+                baseDelivery.shoppingErrand = order.shoppingErrand;
+                break;
+              case 'bill':
+                baseDelivery.billErrand = order.billErrand;
+                break;
+              case 'document':
+                baseDelivery.documentErrand = order.documentErrand;
+                break;
+            }
+          }
+          if (order.errandItems && order.errandItems.length > 0) {
+            baseDelivery.errandItems = order.errandItems;
+          }
           break;
 
         case 'ticket':
@@ -1699,7 +1361,6 @@ const getMyCompletedDeliveries = async (req, res) => {
           baseDelivery.deliveryData = order.deliveryData;
           break;
 
-        // ADDED: bulk case
         case 'bulk':
           baseDelivery.bulkData = order.bulkData;
           break;
@@ -1725,7 +1386,7 @@ const getMyCompletedDeliveries = async (req, res) => {
   }
 };
 
-// [FIXED] Accept delivery with proper acceptedAt and account updates
+// Accept delivery
 const acceptDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1736,7 +1397,6 @@ const acceptDelivery = async (req, res) => {
 
     console.log(`🚀 Rider ${riderId} attempting to accept order ${orderId}`);
 
-    // Validate input
     if (!orderId) {
       await session.abortTransaction();
       return res.status(400).json({
@@ -1745,7 +1405,6 @@ const acceptDelivery = async (req, res) => {
       });
     }
 
-    // Find and update order with acceptedAt
     const order = await Order.findOneAndUpdate(
       {
         _id: orderId,
@@ -1781,10 +1440,8 @@ const acceptDelivery = async (req, res) => {
       });
     }
 
-    // Update rider's account with performance data
     let account = await Account.findOne({ user: riderId }).session(session);
     if (!account) {
-      // Create account if it doesn't exist
       account = await Account.create([{
         user: riderId,
         status: 'active',
@@ -1793,15 +1450,13 @@ const acceptDelivery = async (req, res) => {
       account = account[0];
     }
 
-    // ✅ FIX: Update account performance with the accepted order
     account.incrementAccepted();
-    account.updatePerformance(order); // This will include acceptedAt
+    account.updatePerformance(order);
     await account.save({ session });
 
     await session.commitTransaction();
     console.log(`✅ Order ${orderId} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
 
-    // Format response
     const responseData = {
       _id: order._id,
       orderNumber: order.orderNumber,
@@ -1814,11 +1469,10 @@ const acceptDelivery = async (req, res) => {
         phone: order.user?.phone || order.phone
       },
       deliveryAddress: order.deliveryAddress,
-      acceptedAt: order.acceptedAt, // ✅ Now properly set
+      acceptedAt: order.acceptedAt,
       createdAt: order.createdAt
     };
 
-    // Add type-specific items
     switch (order.type) {
       case 'business':
         responseData.items = order.items.map(item => ({
@@ -1838,7 +1492,23 @@ const acceptDelivery = async (req, res) => {
         break;
 
       case 'errand':
-        responseData.errandItems = order.errandItems;
+        if (order.errandType) {
+          responseData.errandType = order.errandType;
+          switch (order.errandType) {
+            case 'shopping':
+              responseData.shoppingErrand = order.shoppingErrand;
+              break;
+            case 'bill':
+              responseData.billErrand = order.billErrand;
+              break;
+            case 'document':
+              responseData.documentErrand = order.documentErrand;
+              break;
+          }
+        }
+        if (order.errandItems && order.errandItems.length > 0) {
+          responseData.errandItems = order.errandItems;
+        }
         break;
 
       case 'ticket':
@@ -1877,7 +1547,7 @@ const acceptDelivery = async (req, res) => {
   }
 };
 
-// [FIXED] Reject delivery with account updates
+// Reject delivery
 const rejectDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1923,7 +1593,6 @@ const rejectDelivery = async (req, res) => {
       });
     }
 
-    // Update rider's account with rejection data
     let account = await Account.findOne({ user: riderId }).session(session);
     if (!account) {
       account = await Account.create([{
@@ -1934,7 +1603,6 @@ const rejectDelivery = async (req, res) => {
       account = account[0];
     }
 
-    // ✅ FIX: Update account with rejected order data
     account.updatePerformance(order, 'rejected');
     await account.save({ session });
 
@@ -1973,7 +1641,7 @@ const rejectDelivery = async (req, res) => {
   }
 };
 
-// Get rider's active deliveries
+// Get rider's active deliveries - UPDATED
 const getMyActiveDeliveries = async (req, res) => {
   try {
     const riderId = req.user._id;
@@ -1993,8 +1661,7 @@ const getMyActiveDeliveries = async (req, res) => {
         select: 'name address deliveryTime coordinates phone'
       }
     })
-    // ADDED: bulkData to select
-    .select('orderNumber type status total deliveryFee items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
+    .select('orderNumber type status total deliveryFee items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
     .sort({ acceptedAt: -1 })
     .lean();
 
@@ -2015,13 +1682,12 @@ const getMyActiveDeliveries = async (req, res) => {
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
         notes: order.notes || '',
-        acceptedAt: order.acceptedAt, // ✅ Now properly included
+        acceptedAt: order.acceptedAt,
         pickedUpAt: order.pickedUpAt,
         deliveredAt: order.deliveredAt,
         createdAt: order.createdAt
       };
 
-      // Add type-specific items
       switch (order.type) {
         case 'business':
           baseDelivery.items = order.items.map(item => ({
@@ -2041,7 +1707,23 @@ const getMyActiveDeliveries = async (req, res) => {
           break;
 
         case 'errand':
-          baseDelivery.errandItems = order.errandItems;
+          if (order.errandType) {
+            baseDelivery.errandType = order.errandType;
+            switch (order.errandType) {
+              case 'shopping':
+                baseDelivery.shoppingErrand = order.shoppingErrand;
+                break;
+              case 'bill':
+                baseDelivery.billErrand = order.billErrand;
+                break;
+              case 'document':
+                baseDelivery.documentErrand = order.documentErrand;
+                break;
+            }
+          }
+          if (order.errandItems && order.errandItems.length > 0) {
+            baseDelivery.errandItems = order.errandItems;
+          }
           break;
 
         case 'ticket':
@@ -2052,7 +1734,6 @@ const getMyActiveDeliveries = async (req, res) => {
           baseDelivery.deliveryData = order.deliveryData;
           break;
 
-        // ADDED: bulk case
         case 'bulk':
           baseDelivery.bulkData = order.bulkData;
           break;
@@ -2078,7 +1759,7 @@ const getMyActiveDeliveries = async (req, res) => {
   }
 };
 
-// [FIXED] Update order status + earnings with proper account updates for all statuses
+// Update order status
 const updateOrderStatus = async (req, res) => {
   let session = null;
   
@@ -2090,7 +1771,6 @@ const updateOrderStatus = async (req, res) => {
 
     console.log(`🔄 Rider ${riderId} updating order ${orderId} to status: ${status}`);
 
-    // Validate input
     if (!orderId || !status) {
       return res.status(400).json({
         success: false,
@@ -2106,19 +1786,15 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    // Start session for potential transaction
     session = await mongoose.startSession();
     
-    // For delivered status, use transaction for data consistency
     if (status === 'delivered') {
       await session.withTransaction(async () => {
-        // Prepare update data based on status
         const updateData = {
           status,
           $inc: { __v: 1 }
         };
 
-        // Add timestamp based on status
         if (status === 'picked_up') {
           updateData.pickedUpAt = new Date();
         } else if (status === 'delivered') {
@@ -2128,7 +1804,6 @@ const updateOrderStatus = async (req, res) => {
           updateData.cancelledAt = new Date();
         }
 
-        // Atomic update - ensure rider owns the order
         const order = await Order.findOneAndUpdate(
           {
             _id: orderId,
@@ -2155,7 +1830,6 @@ const updateOrderStatus = async (req, res) => {
           throw new Error('Order not found or unauthorized for status update');
         }
 
-        // Update rider's account for delivered orders
         let account = await Account.findOne({ user: riderId }).session(session);
         if (!account) {
           account = await Account.create([{
@@ -2166,22 +1840,17 @@ const updateOrderStatus = async (req, res) => {
           account = account[0];
         }
 
-        // ✅ FIX: Ensure order has acceptedAt before updating performance
         if (!order.acceptedAt) {
           console.warn(`Order ${order._id} missing acceptedAt, setting to current time`);
           order.acceptedAt = new Date();
         }
         
-        // Update performance and earnings for delivered orders
         account.updatePerformance(order, 'delivered');
         account.updateEarnings(order);
         account.incrementCompleted();
         await account.calculateRanking();
-
-        // Save account changes
         await account.save({ session });
 
-        // Also update user delivery history
         const user = await User.findById(riderId).session(session);
         if (user) {
           const driverShare = Math.round(
@@ -2218,20 +1887,17 @@ const updateOrderStatus = async (req, res) => {
         });
       });
     } else {
-      // For non-delivered statuses, use simpler approach without transaction
       const updateData = {
         status,
         $inc: { __v: 1 }
       };
 
-      // Add timestamp based on status
       if (status === 'picked_up') {
         updateData.pickedUpAt = new Date();
       } else if (status === 'cancelled') {
         updateData.cancelledAt = new Date();
       }
 
-      // Update order without transaction
       const order = await Order.findOneAndUpdate(
         {
           _id: orderId,
@@ -2260,7 +1926,6 @@ const updateOrderStatus = async (req, res) => {
         });
       }
 
-      // Update account performance for non-delivered statuses (without transaction)
       let account = await Account.findOne({ user: riderId });
       if (!account) {
         account = await Account.create({
@@ -2270,7 +1935,6 @@ const updateOrderStatus = async (req, res) => {
         });
       }
 
-      // Update performance based on status
       if (status === 'picked_up') {
         account.updatePerformance(order, 'picked_up');
       } else if (status === 'cancelled') {
@@ -2325,13 +1989,11 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
-// ====================
-// ADMIN PANEL FUNCTIONS
-// ====================
+// ================================
+// ADMIN PANEL FUNCTIONS (UPDATED)
+// ================================
 
-// @desc    Get all orders (for admin panel)
-// @route   GET /api/orders
-// @access  Private/Admin
+// Get all orders (for admin panel) - UPDATED
 const getAllOrders = async (req, res) => {
   try {
     console.log('📦 ADMIN - Fetching all orders...');
@@ -2347,13 +2009,11 @@ const getAllOrders = async (req, res) => {
           select: 'name phone address deliveryTime'
         }
       })
-      // ADDED: bulkData to select
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated paymentStatus paymentMethod distance rejectedBy rejectedAt')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated paymentStatus paymentMethod distance rejectedBy rejectedAt')
       .sort({ createdAt: -1 });
 
     console.log(`✅ ADMIN - Found ${orders.length} total orders`);
 
-    // Format orders for frontend
     const formattedOrders = orders.map(order => {
       const baseOrder = {
         id: order._id,
@@ -2363,39 +2023,32 @@ const getAllOrders = async (req, res) => {
         total: order.total,
         deliveryFee: order.deliveryFee,
         subtotal: order.subtotal,
-        // Payment fields
         paymentStatus: order.paymentStatus || 'unpaid',
         paymentMethod: order.paymentMethod || 'cash',
         distance: order.distance || 0,
-        // Customer information
         customer: {
           name: order.user?.name || 'Customer',
           phone: order.user?.phone || order.phone,
           email: order.user?.email || 'N/A'
         },
-        // Rider information
         rider: order.rider ? {
           name: order.rider.name,
           phone: order.rider.phone
         } : null,
-        // Delivery information
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
         notes: order.notes || '',
-        // Timestamps
         createdAt: order.createdAt,
         acceptedAt: order.acceptedAt,
         pickedUpAt: order.pickedUpAt,
         deliveredAt: order.deliveredAt,
         cancelledAt: order.cancelledAt,
         rejectedAt: order.rejectedAt,
-        // Additional admin info
         createdBy: order.createdBy || 'customer',
         isAdminCreated: order.isAdminCreated || false,
         rejectedBy: order.rejectedBy || null
       };
 
-      // Add type-specific items
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
@@ -2414,7 +2067,23 @@ const getAllOrders = async (req, res) => {
           break;
 
         case 'errand':
-          baseOrder.errandItems = order.errandItems;
+          if (order.errandType) {
+            baseOrder.errandType = order.errandType;
+            switch (order.errandType) {
+              case 'shopping':
+                baseOrder.shoppingErrand = order.shoppingErrand;
+                break;
+              case 'bill':
+                baseOrder.billErrand = order.billErrand;
+                break;
+              case 'document':
+                baseOrder.documentErrand = order.documentErrand;
+                break;
+            }
+          }
+          if (order.errandItems && order.errandItems.length > 0) {
+            baseOrder.errandItems = order.errandItems;
+          }
           break;
 
         case 'ticket':
@@ -2425,7 +2094,6 @@ const getAllOrders = async (req, res) => {
           baseOrder.deliveryData = order.deliveryData;
           break;
 
-        // ADDED: bulk case
         case 'bulk':
           baseOrder.bulkData = order.bulkData;
           break;
@@ -2451,9 +2119,7 @@ const getAllOrders = async (req, res) => {
   }
 };
 
-// @desc    Update order (for admin panel)
-// @route   PUT /api/orders/:id
-// @access  Private/Admin
+// Update order (for admin panel)
 const updateOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2461,7 +2127,6 @@ const updateOrder = async (req, res) => {
 
     console.log(`✏️ ADMIN - Updating order ${id}:`, updateData);
 
-    // Validate order exists
     const order = await Order.findById(id);
     if (!order) {
       return res.status(404).json({
@@ -2470,7 +2135,6 @@ const updateOrder = async (req, res) => {
       });
     }
 
-    // Allowed fields for admin update
     const allowedUpdates = ['status', 'deliveryAddress', 'phone', 'notes', 'rider', 'paymentStatus', 'paymentMethod', 'distance'];
     const updates = {};
     
@@ -2480,7 +2144,6 @@ const updateOrder = async (req, res) => {
       }
     });
 
-    // Add timestamps based on status changes
     if (updates.status && updates.status !== order.status) {
       const timestampField = {
         'accepted': 'acceptedAt',
@@ -2542,7 +2205,6 @@ const updateOrder = async (req, res) => {
       cancelledAt: updatedOrder.cancelledAt
     };
 
-    // Add type-specific items
     if (updatedOrder.type === 'business') {
       responseData.items = updatedOrder.items.map(item => ({
         name: item.product?.name || 'Product not found',
@@ -2553,7 +2215,23 @@ const updateOrder = async (req, res) => {
         business: item.product?.business?.name || 'Business not found'
       }));
     } else if (updatedOrder.type === 'errand') {
-      responseData.errandItems = updatedOrder.errandItems;
+      if (updatedOrder.errandType) {
+        responseData.errandType = updatedOrder.errandType;
+        switch (updatedOrder.errandType) {
+          case 'shopping':
+            responseData.shoppingErrand = updatedOrder.shoppingErrand;
+            break;
+          case 'bill':
+            responseData.billErrand = updatedOrder.billErrand;
+            break;
+          case 'document':
+            responseData.documentErrand = updatedOrder.documentErrand;
+            break;
+        }
+      }
+      if (updatedOrder.errandItems && updatedOrder.errandItems.length > 0) {
+        responseData.errandItems = updatedOrder.errandItems;
+      }
     } else if (updatedOrder.type === 'ticket') {
       responseData.ticketData = updatedOrder.ticketData;
     } else if (updatedOrder.type === 'random') {
@@ -2586,9 +2264,7 @@ const updateOrder = async (req, res) => {
   }
 };
 
-// @desc    Delete order (for admin panel)
-// @route   DELETE /api/orders/:id
-// @access  Private/Admin
+// Delete order (for admin panel)
 const deleteOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2603,7 +2279,6 @@ const deleteOrder = async (req, res) => {
       });
     }
 
-    // Prevent deletion of orders that are in progress
     if (['accepted', 'picked_up'].includes(order.status)) {
       return res.status(400).json({
         success: false,
@@ -2638,10 +2313,290 @@ const deleteOrder = async (req, res) => {
   }
 };
 
+// Create order for user (admin only)
+const createOrderForUser = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-// @desc    Get rider's orders with status filter (admin only)
-// @route   GET /api/orders/rider/:riderId
-// @access  Private/Admin
+  try {
+    const { 
+      userId,
+      type = 'business',
+      items, 
+      deliveryAddress, 
+      phone, 
+      notes,
+      // Errand specific
+      errandItems,
+      errandType,
+      shoppingErrand,
+      billErrand,
+      documentErrand,
+      // Ticket specific
+      busAgency, seatNumber, idCard, departureTime, destination, ticketPrice,
+      // Random delivery specific
+      pickupAddress, deliveryAddress: randomDeliveryAddress, senderNumber, receiverNumber, itemDescription, deliveryPrice
+    } = req.body;
+
+    if (req.user.role !== 'admin') {
+      await session.abortTransaction();
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Admin privileges required."
+      });
+    }
+
+    if (!userId) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required to create order on behalf of user"
+      });
+    }
+
+    if (!['business', 'errand', 'ticket', 'random'].includes(type)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "Valid order type is required (business, errand, ticket, random)"
+      });
+    }
+
+    if (!deliveryAddress || !phone) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: "Delivery address and phone are required",
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    let orderData = {
+      user: userId,
+      type,
+      deliveryAddress,
+      phone,
+      notes: notes || "",
+      createdBy: req.user._id,
+      isAdminCreated: true
+    };
+
+    let businessIds = [];
+    let calculatedTotal = 0;
+    let calculatedSubtotal = 0;
+    let calculatedDeliveryFee = 0;
+
+    switch (type) {
+      case 'business':
+        if (!items || items.length === 0) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            success: false,
+            message: "No items in order",
+          });
+        }
+
+        const businessResult = await validateBusinessOrder(items);
+        orderData.items = businessResult.orderItems;
+        orderData.subtotal = businessResult.subtotal;
+        orderData.deliveryFee = businessResult.deliveryFee;
+        orderData.total = businessResult.total;
+        businessIds = businessResult.businessIds;
+        break;
+
+      case 'errand':
+        if (errandType && (shoppingErrand || billErrand || documentErrand)) {
+          orderData.errandType = errandType;
+          switch (errandType) {
+            case 'shopping':
+              if (!shoppingErrand) throw new Error('shoppingErrand data missing');
+              orderData.shoppingErrand = shoppingErrand;
+              break;
+            case 'bill':
+              if (!billErrand) throw new Error('billErrand data missing');
+              orderData.billErrand = billErrand;
+              break;
+            case 'document':
+              if (!documentErrand) throw new Error('documentErrand data missing');
+              orderData.documentErrand = documentErrand;
+              break;
+            default:
+              throw new Error('Invalid errandType');
+          }
+        } else if (errandItems && errandItems.length > 0) {
+          const validatedErrandItems = validateErrandItems(errandItems);
+          orderData.errandItems = validatedErrandItems;
+          calculatedSubtotal = validatedErrandItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+          calculatedDeliveryFee = 1000;
+          calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+          orderData.subtotal = calculatedSubtotal;
+          orderData.deliveryFee = calculatedDeliveryFee;
+          orderData.total = calculatedTotal;
+        } else {
+          throw new Error('Errand orders require either legacy errandItems or new structured data');
+        }
+        break;
+
+      case 'ticket':
+        const ticketData = validateTicketBooking({
+          busAgency, seatNumber, idCard, departureTime, destination, price: ticketPrice
+        });
+        orderData.ticketData = ticketData;
+        calculatedSubtotal = ticketData.price || 5000;
+        calculatedDeliveryFee = 1000;
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+
+      case 'random':
+        const deliveryData = validateRandomDelivery({
+          pickupAddress: pickupAddress || deliveryAddress,
+          deliveryAddress: randomDeliveryAddress || deliveryAddress,
+          senderNumber,
+          receiverNumber,
+          itemDescription,
+          price: deliveryPrice
+        });
+        orderData.deliveryData = deliveryData;
+        calculatedSubtotal = deliveryData.price || 2000;
+        calculatedDeliveryFee = 1000;
+        calculatedTotal = calculatedSubtotal + calculatedDeliveryFee;
+        orderData.subtotal = calculatedSubtotal;
+        orderData.deliveryFee = calculatedDeliveryFee;
+        orderData.total = calculatedTotal;
+        break;
+    }
+
+    const orderNumber = await generateOrderNumber();
+    orderData.orderNumber = orderNumber;
+
+    const order = await Order.create([orderData], { session });
+    const createdOrder = order[0];
+
+    await createdOrder.populate('user', 'name phone email');
+    
+    if (type === 'business') {
+      await createdOrder.populate({
+        path: "items.product",
+        select: "name images price featuredImage business",
+        populate: {
+          path: "business",
+          select: "name deliveryTime phone address"
+        }
+      });
+    }
+
+    const notificationResult = await sendOrderNotifications(createdOrder);
+
+    await session.commitTransaction();
+
+    let responseData = {
+      orderNumber: createdOrder.orderNumber,
+      type: createdOrder.type,
+      status: createdOrder.status,
+      total: createdOrder.total,
+      deliveryFee: createdOrder.deliveryFee,
+      subtotal: createdOrder.subtotal,
+      customer: {
+        name: createdOrder.user.name,
+        phone: createdOrder.user.phone,
+        email: createdOrder.user.email
+      },
+      deliveryAddress: createdOrder.deliveryAddress,
+      phone: createdOrder.phone,
+      notes: createdOrder.notes,
+      createdAt: createdOrder.createdAt,
+      createdBy: 'admin'
+    };
+
+    switch (type) {
+      case 'business':
+        responseData.items = createdOrder.items.map((item) => ({
+          name: item.product.name,
+          images: item.product.images || [],
+          featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
+          price: item.price,
+          quantity: item.quantity,
+          business: item.product.business?.name || 'Business not found',
+          deliveryTime: item.product.business?.deliveryTime || 'N/A',
+        }));
+        break;
+
+      case 'errand':
+        if (createdOrder.errandType) {
+          responseData.errandType = createdOrder.errandType;
+          switch (createdOrder.errandType) {
+            case 'shopping':
+              responseData.shoppingErrand = createdOrder.shoppingErrand;
+              break;
+            case 'bill':
+              responseData.billErrand = createdOrder.billErrand;
+              break;
+            case 'document':
+              responseData.documentErrand = createdOrder.documentErrand;
+              break;
+          }
+        }
+        if (createdOrder.errandItems && createdOrder.errandItems.length > 0) {
+          responseData.errandItems = createdOrder.errandItems;
+        }
+        break;
+
+      case 'ticket':
+        responseData.ticketData = createdOrder.ticketData;
+        break;
+
+      case 'random':
+        responseData.deliveryData = createdOrder.deliveryData;
+        break;
+    }
+
+    res.status(201).json({
+      success: true,
+      data: responseData,
+      notifications: notificationResult,
+      message: `${type.charAt(0).toUpperCase() + type.slice(1)} order created successfully for user!`,
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Admin order creation error:", error);
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Order number conflict. Please try again.",
+      });
+    }
+
+    if (error.name === 'ValidationError' || error.message.includes('required')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Server error creating order for user",
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Get rider orders (admin only) - UPDATED
 const getRiderOrders = async (req, res) => {
   try {
     const { riderId } = req.params;
@@ -2655,7 +2610,6 @@ const getRiderOrders = async (req, res) => {
       limit
     });
 
-    // Validate rider exists and get commission rate
     const rider = await User.findById(riderId).select('name phone email role commission');
     if (!rider) {
       return res.status(404).json({
@@ -2671,16 +2625,12 @@ const getRiderOrders = async (req, res) => {
       });
     }
 
-    // Get commission rate (default to 75% if not set)
     const commissionRate = rider.commission || 0.75;
 
-    // Build query
     const query = { rider: riderId };
     
-    // Add status filter if provided
     if (status) {
       if (status === 'all') {
-        // Include all orders except pending (since rider can only accept pending orders)
         query.status = { $in: ['accepted', 'picked_up', 'delivered', 'cancelled', 'rejected'] };
       } else if (status === 'active') {
         query.status = { $in: ['accepted', 'picked_up'] };
@@ -2691,7 +2641,6 @@ const getRiderOrders = async (req, res) => {
       }
     }
 
-    // Add date range filter if provided
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) {
@@ -2702,12 +2651,10 @@ const getRiderOrders = async (req, res) => {
       }
     }
 
-    // Calculate pagination
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Get orders with pagination
     const orders = await Order.find(query)
       .populate('user', 'name phone')
       .populate({
@@ -2718,28 +2665,23 @@ const getRiderOrders = async (req, res) => {
           select: 'name address phone deliveryTime'
         }
       })
-      // ADDED: bulkData to select
-      .select('orderNumber type status total deliveryFee subtotal items errandItems ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
+      .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
       .lean();
 
-    // Get total count for pagination
     const total = await Order.countDocuments(query);
 
     console.log(`✅ ADMIN - Found ${orders.length} orders for rider ${riderId}`);
 
-    // Format orders and calculate earnings with commission
     let totalDeliveryFees = 0;
     let totalRiderEarnings = 0;
 
     const formattedOrders = orders.map(order => {
-      // Calculate rider's earnings for this order (after commission)
       const deliveryFee = order.deliveryFee || 0;
       const riderEarnings = Math.round(deliveryFee * commissionRate * 100) / 100;
       
-      // Accumulate totals
       totalDeliveryFees += deliveryFee;
       totalRiderEarnings += riderEarnings;
 
@@ -2750,23 +2692,19 @@ const getRiderOrders = async (req, res) => {
         status: order.status,
         total: order.total,
         deliveryFee: deliveryFee,
-        riderEarnings: riderEarnings, // Add rider's actual earnings to each order
-        commissionRate: commissionRate, // Include commission rate in response
+        riderEarnings: riderEarnings,
+        commissionRate: commissionRate,
         subtotal: order.subtotal,
-        // Payment info
         paymentStatus: order.paymentStatus || 'unpaid',
         paymentMethod: order.paymentMethod || 'cash',
         distance: order.distance || 0,
-        // Customer info
         customer: {
           name: order.user?.name || 'Customer',
           phone: order.user?.phone || order.phone
         },
-        // Delivery info
         deliveryAddress: order.deliveryAddress,
         phone: order.phone,
         notes: order.notes || '',
-        // Timestamps
         createdAt: order.createdAt,
         acceptedAt: order.acceptedAt,
         pickedUpAt: order.pickedUpAt,
@@ -2775,7 +2713,6 @@ const getRiderOrders = async (req, res) => {
         rejectedAt: order.rejectedAt
       };
 
-      // Add type-specific items
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
@@ -2794,7 +2731,23 @@ const getRiderOrders = async (req, res) => {
           break;
 
         case 'errand':
-          baseOrder.errandItems = order.errandItems;
+          if (order.errandType) {
+            baseOrder.errandType = order.errandType;
+            switch (order.errandType) {
+              case 'shopping':
+                baseOrder.shoppingErrand = order.shoppingErrand;
+                break;
+              case 'bill':
+                baseOrder.billErrand = order.billErrand;
+                break;
+              case 'document':
+                baseOrder.documentErrand = order.documentErrand;
+                break;
+            }
+          }
+          if (order.errandItems && order.errandItems.length > 0) {
+            baseOrder.errandItems = order.errandItems;
+          }
           break;
 
         case 'ticket':
@@ -2805,7 +2758,6 @@ const getRiderOrders = async (req, res) => {
           baseOrder.deliveryData = order.deliveryData;
           break;
 
-        // ADDED: bulk case
         case 'bulk':
           baseOrder.bulkData = order.bulkData;
           break;
@@ -2814,7 +2766,6 @@ const getRiderOrders = async (req, res) => {
       return baseOrder;
     });
 
-    // Calculate rider statistics with commission
     const completedOrdersCount = await Order.countDocuments({ 
       rider: riderId, 
       status: 'delivered' 
@@ -2832,7 +2783,6 @@ const getRiderOrders = async (req, res) => {
 
     const totalOrdersCount = await Order.countDocuments({ rider: riderId });
 
-    // Calculate total earnings using aggregation for accuracy
     const earningsResult = await Order.aggregate([
       { 
         $match: { 
@@ -2857,10 +2807,10 @@ const getRiderOrders = async (req, res) => {
       completedOrders: completedOrdersCount,
       activeOrders: activeOrdersCount,
       cancelledOrders: cancelledOrdersCount,
-      totalDeliveryFees: aggregatedTotalDeliveryFees, // Total delivery fees before commission
-      totalEarnings: calculatedTotalEarnings, // Rider's actual earnings after commission
-      commissionRate: commissionRate, // Rider's commission rate
-      platformShare: Math.round(aggregatedTotalDeliveryFees * (1 - commissionRate) * 100) / 100 // Platform's share
+      totalDeliveryFees: aggregatedTotalDeliveryFees,
+      totalEarnings: calculatedTotalEarnings,
+      commissionRate: commissionRate,
+      platformShare: Math.round(aggregatedTotalDeliveryFees * (1 - commissionRate) * 100) / 100
     };
 
     res.json({
@@ -2872,7 +2822,7 @@ const getRiderOrders = async (req, res) => {
           phone: rider.phone,
           email: rider.email,
           role: rider.role,
-          commission: commissionRate // Include commission in rider info
+          commission: commissionRate
         },
         orders: formattedOrders,
         statistics: stats,
@@ -2905,24 +2855,14 @@ const getRiderOrders = async (req, res) => {
   }
 };
 
-
-// @desc    Get orders by business ID (FINAL FIXED VERSION)
-// @route   GET /api/orders/business/:businessId
-// @access  Private/BusinessOwner/Admin
+// Get orders by business ID (for business owners) - UPDATED (though errand orders may not be relevant for businesses)
 const getOrdersByBusiness = async (req, res) => {
   try {
     const { businessId } = req.params;
-    const { 
-      status, 
-      startDate, 
-      endDate, 
-      page = 1, 
-      limit = 20
-    } = req.query;
+    const { status, startDate, endDate, page = 1, limit = 20 } = req.query;
 
     console.log(`🏪 Fetching orders for business ${businessId}`);
 
-    // Validate business exists
     const business = await Business.findById(businessId).select('name phone address owner');
     if (!business) {
       return res.status(404).json({
@@ -2931,7 +2871,6 @@ const getOrdersByBusiness = async (req, res) => {
       });
     }
 
-    // Check if user has permission
     const isBusinessOwner = business.owner && business.owner.toString() === req.user._id.toString();
     const isAuthorized = req.user.role === 'admin' || 'vendor';
     
@@ -2942,17 +2881,12 @@ const getOrdersByBusiness = async (req, res) => {
       });
     }
 
-    // Build query to find business-type orders
-    const query = { 
-      type: 'business' // Only get business-type orders
-    };
+    const query = { type: 'business' };
 
-    // Add status filter if provided
     if (status && status !== 'all') {
       query.status = status;
     }
 
-    // Add date range filter if provided
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) {
@@ -2963,12 +2897,10 @@ const getOrdersByBusiness = async (req, res) => {
       }
     }
 
-    // Calculate pagination
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Get ALL business-type orders first
     const orders = await Order.find(query)
       .populate('user', 'name phone email')
       .populate('rider', 'name phone')
@@ -2988,29 +2920,23 @@ const getOrdersByBusiness = async (req, res) => {
 
     console.log(`📊 Found ${orders.length} business-type orders`);
 
-    // Filter orders to only include those with items from this specific business
     const filteredOrders = orders.map(order => {
-      // Filter items to only include products that belong to this business
       const businessItems = order.items.filter(item => {
         if (!item.product || !item.product.business) return false;
-        
         const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
         return itemBusinessId === businessId;
       });
 
-      // If no items from this business, return null (will be filtered out)
       if (businessItems.length === 0) {
         return null;
       }
 
       console.log(`🛒 Order ${order.orderNumber}: ${businessItems.length} items from ${business.name}`);
 
-      // Calculate business-specific totals
       const businessSubtotal = businessItems.reduce((sum, item) => 
         sum + (item.price * item.quantity), 0
       );
 
-      // Calculate proportional delivery fee
       const totalOrderValue = order.items.reduce((sum, item) => 
         sum + (item.price * item.quantity), 0
       );
@@ -3052,7 +2978,6 @@ const getOrdersByBusiness = async (req, res) => {
         createdBy: order.createdBy || 'customer',
         isAdminCreated: order.isAdminCreated || false,
         rejectedBy: order.rejectedBy,
-        // Business-specific data
         items: businessItems.map(item => ({
           name: item.product.name,
           images: item.product.images || [],
@@ -3071,9 +2996,8 @@ const getOrdersByBusiness = async (req, res) => {
         businessTotal,
         itemCount: businessItems.length
       };
-    }).filter(order => order !== null); // Remove orders that don't have items from this business
+    }).filter(order => order !== null);
 
-    // Get total count for pagination (need to do this differently)
     const allBusinessOrders = await Order.find({ type: 'business' })
       .populate({
         path: 'items.product',
@@ -3093,7 +3017,6 @@ const getOrdersByBusiness = async (req, res) => {
       })
     ).length;
 
-    // Calculate business statistics
     const stats = {
       totalOrders: filteredOrders.length,
       pendingOrders: 0,
@@ -3106,19 +3029,16 @@ const getOrdersByBusiness = async (req, res) => {
     };
 
     filteredOrders.forEach(order => {
-      // Count by status
       if (order.status === 'pending') stats.pendingOrders++;
       if (order.status === 'accepted') stats.acceptedOrders++;
       if (order.status === 'delivered') stats.deliveredOrders++;
       if (order.status === 'cancelled') stats.cancelledOrders++;
 
-      // Calculate revenue from delivered orders
       if (order.status === 'delivered') {
         stats.totalRevenue += order.businessSubtotal;
       }
     });
 
-    // Calculate averages
     stats.averageOrderValue = stats.deliveredOrders > 0 
       ? Math.round(stats.totalRevenue / stats.deliveredOrders) 
       : 0;
@@ -3166,9 +3086,7 @@ const getOrdersByBusiness = async (req, res) => {
   }
 };
 
-// @desc    Get business order statistics (FIXED VERSION)
-// @route   GET /api/orders/business/:businessId/stats
-// @access  Private/BusinessOwner/Admin
+// Get business order statistics
 const getBusinessOrderStats = async (req, res) => {
   try {
     const { businessId } = req.params;
@@ -3176,7 +3094,6 @@ const getBusinessOrderStats = async (req, res) => {
 
     console.log(`📊 Fetching order stats for business ${businessId} for period: ${period}`);
 
-    // Validate business exists
     const business = await Business.findById(businessId).select('name owner');
     if (!business) {
       return res.status(404).json({
@@ -3185,7 +3102,6 @@ const getBusinessOrderStats = async (req, res) => {
       });
     }
 
-    // Check permission
     const isBusinessOwner = business.owner && business.owner.toString() === req.user._id.toString();
     const isAdmin = req.user.role === 'admin';
     
@@ -3196,7 +3112,6 @@ const getBusinessOrderStats = async (req, res) => {
       });
     }
 
-    // Calculate date range based on period
     const now = new Date();
     let startDate = new Date();
 
@@ -3219,7 +3134,6 @@ const getBusinessOrderStats = async (req, res) => {
 
     console.log(`📅 Date range: ${startDate} to ${now}`);
 
-    // Get all business orders within date range
     const allOrders = await Order.find({ 
       type: 'business',
       createdAt: { $gte: startDate }
@@ -3236,7 +3150,6 @@ const getBusinessOrderStats = async (req, res) => {
 
     console.log(`📦 Found ${allOrders.length} total business orders in date range`);
 
-    // Filter orders to only include those with items from this business
     const businessOrders = allOrders.filter(order => 
       order.items.some(item => {
         if (!item.product || !item.product.business) return false;
@@ -3247,7 +3160,6 @@ const getBusinessOrderStats = async (req, res) => {
 
     console.log(`✅ Found ${businessOrders.length} orders for ${business.name}`);
 
-    // Calculate status breakdown
     const statusBreakdown = {
       pending: 0,
       accepted: 0,
@@ -3261,13 +3173,10 @@ const getBusinessOrderStats = async (req, res) => {
     let cancelledCount = 0;
 
     businessOrders.forEach(order => {
-      // Count by status
       statusBreakdown[order.status] = (statusBreakdown[order.status] || 0) + 1;
 
-      // Calculate revenue from delivered orders
       if (order.status === 'delivered') {
         deliveredCount++;
-        // Calculate business-specific revenue for this order
         const businessItems = order.items.filter(item => {
           if (!item.product || !item.product.business) return false;
           const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
@@ -3290,7 +3199,6 @@ const getBusinessOrderStats = async (req, res) => {
     const completionRate = totalOrders > 0 ? Math.round((deliveredCount / totalOrders) * 100) : 0;
     const cancellationRate = totalOrders > 0 ? Math.round((cancelledCount / totalOrders) * 100) : 0;
 
-    // Get daily trends
     const dailyTrends = [];
     const dailyRevenue = {};
 
@@ -3298,7 +3206,6 @@ const getBusinessOrderStats = async (req, res) => {
       if (order.status === 'delivered') {
         const dateStr = order.createdAt.toISOString().split('T')[0];
         
-        // Calculate business-specific revenue for this order
         const businessItems = order.items.filter(item => {
           if (!item.product || !item.product.business) return false;
           const itemBusinessId = item.product.business._id?.toString() || item.product.business?.toString();
@@ -3317,7 +3224,6 @@ const getBusinessOrderStats = async (req, res) => {
       }
     });
 
-    // Convert daily revenue to array format
     Object.keys(dailyRevenue).forEach(date => {
       dailyTrends.push({
         _id: date,
@@ -3326,10 +3232,8 @@ const getBusinessOrderStats = async (req, res) => {
       });
     });
 
-    // Sort daily trends by date
     dailyTrends.sort((a, b) => a._id.localeCompare(b._id));
 
-    // Get popular products
     const productSales = {};
 
     businessOrders.forEach(order => {
@@ -3354,7 +3258,6 @@ const getBusinessOrderStats = async (req, res) => {
       }
     });
 
-    // Convert to array and sort by total sold
     const popularProducts = Object.values(productSales)
       .sort((a, b) => b.totalSold - a.totalSold)
       .slice(0, 10);
@@ -3412,12 +3315,117 @@ const getBusinessOrderStats = async (req, res) => {
   }
 };
 
-/**
- * @desc    Confirm an order after successful payment
- * @route   PATCH /api/orders/order-number/:orderNumber/confirm
- * @access  Private (order owner)
- */
+// Cancel order (customer only)
+const cancelOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
+  try {
+    const { orderNumber } = req.params;
+    const userId = req.user._id;
+
+    const order = await Order.findOne({
+      orderNumber: orderNumber,
+      user: userId,
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found or you are not authorized',
+      });
+    }
+
+    if (order.status !== 'pending') {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel order in "${order.status}" status. Only pending orders can be cancelled.`,
+      });
+    }
+
+    order.status = 'cancelled';
+    order.cancelledAt = new Date();
+    await order.save({ session });
+
+    await session.commitTransaction();
+
+    res.json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        cancelledAt: order.cancelledAt,
+      },
+      message: 'Order cancelled successfully',
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('❌ Cancel order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel order',
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Delete my order (customer only)
+const deleteMyOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { orderNumber } = req.params;
+    const userId = req.user._id;
+
+    console.log('orderNumber:::', orderNumber);
+
+    const order = await Order.findOne({
+      orderNumber: orderNumber,
+      user: userId,
+    }).session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found or you are not authorized',
+      });
+    }
+
+    if (!['cancelled', 'pending'].includes(order.status)) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete order in "${order.status}" status. Only cancelled or pending orders can be deleted.`,
+      });
+    }
+
+    await Order.deleteOne({ _id: order._id }).session(session);
+    await session.commitTransaction();
+
+    res.json({
+      success: true,
+      message: 'Order deleted successfully',
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('❌ Delete order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete order',
+      error: error.message,
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Confirm order after payment
 const confirmOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -3425,10 +3433,8 @@ const confirmOrder = async (req, res) => {
   try {
     const { orderNumber } = req.params;
     const userId = req.user._id;
-    // Default to 'momo' if no pm query param is provided
     const paymentMethod = req.query.pm || 'momo';
 
-    // Validate allowed payment methods
     const allowedMethods = ['cash', 'momo'];
     if (!allowedMethods.includes(paymentMethod)) {
       await session.abortTransaction();
@@ -3467,15 +3473,12 @@ const confirmOrder = async (req, res) => {
       });
     }
 
-    // Update order with confirmation details
     order.status = 'confirmed';
     order.paymentMethod = paymentMethod;
 
-    // Set payment status based on payment method
     if (paymentMethod === 'momo') {
       order.paymentStatus = 'paid';
     } else if (paymentMethod === 'cash') {
-      // Cash orders remain unpaid until delivery
       order.paymentStatus = 'unpaid';
     }
 
@@ -3520,13 +3523,11 @@ module.exports = {
   rejectDelivery,
   getMyActiveDeliveries,
   updateOrderStatus,
-  // NEW ADMIN FUNCTIONS
   getAllOrders,
   updateOrder,
   deleteOrder,
   createOrderForUser,
   getRiderOrders,
-  // NEW BUSINESS FUNCTIONS
   getOrdersByBusiness,
   getBusinessOrderStats,
   confirmOrder,
