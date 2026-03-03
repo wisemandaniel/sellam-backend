@@ -913,7 +913,15 @@ const getOrderByNumber = async (req, res) => {
 
     const order = await Order.findOne({ orderNumber })
       .populate('user', 'name phone email')
-      .populate('rider', 'name phone vehicle plateNumber');
+      .populate('rider', 'name phone vehicle plateNumber')
+      .populate({
+        path: 'items.product',
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name deliveryTime'
+        }
+      });
 
     if (!order) {
       return res.status(404).json({
