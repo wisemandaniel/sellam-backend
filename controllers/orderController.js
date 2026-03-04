@@ -766,9 +766,9 @@ const createOrder = async (req, res) => {
         const totalParcels = validatedBulkData.parcels.length;
         const perParcelFee = 750; // fixed per parcel fee
 
-        orderData.subtotal = totalParcels * perParcelFee;
-        orderData.deliveryFee = 0; // bulk orders have no extra delivery fee
-        orderData.total = orderData.subtotal;
+        const totalParcelCost = totalParcels * perParcelFee;
+        orderData.deliveryFee = totalParcelCost;
+        orderData.total = totalParcelCost;
 
         if (notes) {
           orderData.notes = notes;
@@ -1427,29 +1427,29 @@ const getMyCompletedDeliveries = async (req, res) => {
   }
 };
 
-// Accept delivery
+// Accept delivery - using orderNumber instead of orderId
 const acceptDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { orderId } = req.params;
+    const { orderNumber } = req.params;                // Changed from orderId
     const riderId = req.user._id;
 
-    console.log(`🚀 Rider ${riderId} attempting to accept order ${orderId}`);
+    console.log(`🚀 Rider ${riderId} attempting to accept order ${orderNumber}`);
 
-    if (!orderId) {
+    if (!orderNumber) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: 'Order ID is required'
+        message: 'Order number is required'            // Updated message
       });
     }
 
     const order = await Order.findOneAndUpdate(
       {
-        _id: orderId,
-        status: 'pending'
+        orderNumber: orderNumber,                       // Query by orderNumber, not _id
+        status: 'confirmed'
       },
       {
         status: 'accepted',
@@ -1474,7 +1474,7 @@ const acceptDelivery = async (req, res) => {
 
     if (!order) {
       await session.abortTransaction();
-      console.log(`❌ Order ${orderId} not found or already taken`);
+      console.log(`❌ Order ${orderNumber} not found or already taken`);
       return res.status(404).json({
         success: false,
         message: 'Order not found or already accepted by another rider'
@@ -1496,7 +1496,7 @@ const acceptDelivery = async (req, res) => {
     await account.save({ session });
 
     await session.commitTransaction();
-    console.log(`✅ Order ${orderId} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
+    console.log(`✅ Order ${orderNumber} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
 
     const responseData = {
       _id: order._id,
@@ -1574,7 +1574,7 @@ const acceptDelivery = async (req, res) => {
     if (error.name === 'CastError') {
       return res.status(400).json({
         success: false,
-        message: 'Invalid order ID'
+        message: 'Invalid order number'                 // Updated message
       });
     }
 
