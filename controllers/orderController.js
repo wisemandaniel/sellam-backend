@@ -766,9 +766,9 @@ const createOrder = async (req, res) => {
         const totalParcels = validatedBulkData.parcels.length;
         const perParcelFee = 750; // fixed per parcel fee
 
-        orderData.subtotal = totalParcels * perParcelFee;
-        orderData.deliveryFee = 0; // bulk orders have no extra delivery fee
-        orderData.total = orderData.subtotal;
+        const totalParcelCost = totalParcels * perParcelFee;
+        orderData.deliveryFee = totalParcelCost;
+        orderData.total = totalParcelCost;
 
         if (notes) {
           orderData.notes = notes;
