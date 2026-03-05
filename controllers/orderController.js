@@ -1450,13 +1450,13 @@ const acceptDelivery = async (req, res) => {
     const activeCount = await Order.countDocuments({
       rider: riderId,
       status: { $in: ['accepted', 'picked_up'] }
-    }).session(session);  // use the same session for consistency
+    }).session(session);
 
     if (activeCount >= 2) {
       await session.abortTransaction();
-      return res.status(400).json({
+      return res.status(200).json({
         success: false,
-        message: 'You cannot accept more than 2 deliveries at the same time. Please complete one of your current deliveries first.'
+        message: 'You already have 2 active deliveries. Please complete one before accepting a new order.'
       });
     }
 
@@ -1496,7 +1496,7 @@ const acceptDelivery = async (req, res) => {
       });
     }
 
-    // Update rider's account stats (unchanged)
+    // Update rider's account stats
     let account = await Account.findOne({ user: riderId }).session(session);
     if (!account) {
       account = await Account.create([{
@@ -1514,7 +1514,7 @@ const acceptDelivery = async (req, res) => {
     await session.commitTransaction();
     console.log(`✅ Order ${orderNumber} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
 
-    // Build response (unchanged)
+    // Build response data
     const responseData = {
       _id: order._id,
       orderNumber: order.orderNumber,
@@ -1575,6 +1575,10 @@ const acceptDelivery = async (req, res) => {
 
       case 'random':
         responseData.deliveryData = order.deliveryData;
+        break;
+
+      case 'bulk':
+        responseData.bulkData = order.bulkData;
         break;
     }
 
