@@ -1433,7 +1433,7 @@ const acceptDelivery = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { orderNumber } = req.params;                // Changed from orderId
+    const { orderNumber } = req.params;
     const riderId = req.user._id;
 
     console.log(`🚀 Rider ${riderId} attempting to accept order ${orderNumber}`);
@@ -1442,19 +1442,34 @@ const acceptDelivery = async (req, res) => {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: 'Order number is required'            // Updated message
+        message: 'Order number is required'
       });
     }
 
+    // 🔍 Check how many active deliveries this rider already has
+    const activeCount = await Order.countDocuments({
+      rider: riderId,
+      status: { $in: ['accepted', 'picked_up'] }
+    }).session(session);  // use the same session for consistency
+
+    if (activeCount >= 2) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot accept more than 2 deliveries at the same time. Please complete one of your current deliveries first.'
+      });
+    }
+
+    // ✅ Attempt to accept the order
     const order = await Order.findOneAndUpdate(
       {
-        orderNumber: orderNumber,                       // Query by orderNumber, not _id
+        orderNumber: orderNumber,
         status: 'confirmed'
       },
       {
         status: 'accepted',
         rider: riderId,
-        acceptedAt: new Date(), 
+        acceptedAt: new Date(),
         $inc: { __v: 1 }
       },
       {
@@ -1481,6 +1496,7 @@ const acceptDelivery = async (req, res) => {
       });
     }
 
+    // Update rider's account stats (unchanged)
     let account = await Account.findOne({ user: riderId }).session(session);
     if (!account) {
       account = await Account.create([{
@@ -1498,6 +1514,7 @@ const acceptDelivery = async (req, res) => {
     await session.commitTransaction();
     console.log(`✅ Order ${orderNumber} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
 
+    // Build response (unchanged)
     const responseData = {
       _id: order._id,
       orderNumber: order.orderNumber,
@@ -1574,7 +1591,7 @@ const acceptDelivery = async (req, res) => {
     if (error.name === 'CastError') {
       return res.status(400).json({
         success: false,
-        message: 'Invalid order number'                 // Updated message
+        message: 'Invalid order number'
       });
     }
 
