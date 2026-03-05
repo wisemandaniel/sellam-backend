@@ -1427,7 +1427,7 @@ const getMyCompletedDeliveries = async (req, res) => {
   }
 };
 
-// Accept delivery - using orderNumber instead of orderId
+// Accept delivery - using orderNumber
 const acceptDelivery = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -1443,6 +1443,34 @@ const acceptDelivery = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Order number is required'
+      });
+    }
+
+    // 🔍 Check if rider exists
+    const rider = await User.findById(riderId).session(session);
+    if (!rider) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Rider not found'
+      });
+    }
+
+    // ✅ Profile completeness check
+    if (!rider.isProfileComplete) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Please complete your profile before accepting deliveries.'
+      });
+    }
+
+    // ✅ Approval check (specific to riders)
+    if (!rider.isApproved) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Your account is pending approval. You cannot accept deliveries yet.'
       });
     }
 
@@ -1608,6 +1636,8 @@ const acceptDelivery = async (req, res) => {
     session.endSession();
   }
 };
+
+module.exports = { acceptDelivery };
 
 // Reject delivery
 const rejectDelivery = async (req, res) => {

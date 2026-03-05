@@ -1,229 +1,216 @@
 const mongoose = require("mongoose");
+const Order = require("../models/Order");
+const Account = require("../models/Account");
+const User = require("../models/User");
 
-// Sub-schemas for different order types
-const orderItemSchema = new mongoose.Schema(
-  {
-    product: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
-    store: { type: mongoose.Schema.Types.ObjectId, ref: "Store" },
-    business: { type: mongoose.Schema.Types.ObjectId, ref: "Business" },
-    quantity: { type: Number, min: 1 },
-    price: { type: Number, min: 0 },
-  },
-  { _id: false }
-);
+// Accept delivery - using orderNumber instead of orderId
+const acceptDelivery = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-// Legacy errand item schema (still supported)
-const errandItemSchema = new mongoose.Schema(
-  {
-    name: { type: String, required: true },
-    price: { type: Number, required: true, min: 0 },
-    quantity: { type: Number, default: 1, min: 1 },
-    description: { type: String, default: "" },
-  },
-  { _id: false }
-);
+  try {
+    const { orderNumber } = req.params;
+    const riderId = req.user._id;
 
-// ==================== New Errand Sub‑schemas ====================
+    console.log(`🚀 Rider ${riderId} attempting to accept order ${orderNumber}`);
 
-const shoppingErrandSchema = new mongoose.Schema(
-  {
-    items: [
+    if (!orderNumber) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        success: false,
+        message: 'Order number is required'
+      });
+    }
+
+    // 🔍 Check if rider exists
+    const rider = await User.findById(riderId).session(session);
+    if (!rider) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Rider not found'
+      });
+    }
+
+    // ✅ Profile completeness check
+    if (!rider.isProfileComplete) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Please complete your profile before accepting deliveries.'
+      });
+    }
+
+    // ✅ Approval check (specific to riders)
+    if (!rider.isApproved) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Your account is pending approval. You cannot accept deliveries yet.'
+      });
+    }
+
+    // 🔍 Check how many active deliveries this rider already has
+    const activeCount = await Order.countDocuments({
+      rider: riderId,
+      status: { $in: ['accepted', 'picked_up'] }
+    }).session(session);
+
+    if (activeCount >= 2) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'You already have 2 active deliveries. Please complete one before accepting a new order.'
+      });
+    }
+
+    // ✅ Attempt to accept the order
+    const order = await Order.findOneAndUpdate(
       {
-        name: { type: String, required: true },
-        price: { type: Number, required: true, min: 0 },
-        quantity: { type: Number, default: 1, min: 1 },
+        orderNumber: orderNumber,
+        status: 'confirmed'
       },
-    ],
-    budget: { type: Number, min: 0 },
-    instructions: { type: String, default: "" },
-  },
-  { _id: false }
-);
-
-const billErrandSchema = new mongoose.Schema(
-  {
-    billType: {
-      name: { type: String, required: true },
-    },
-    accountNumber: { type: String, required: true },
-    bankName: { type: String },
-    amount: { type: Number, required: true, min: 0 },
-    studentInfo: {
-      fullName: { type: String },
-      faculty: { type: String },
-      department: { type: String },
-    },
-    tenantInfo: {
-      fullName: { type: String },
-      roomNumber: { type: String },
-    },
-    invoiceImageUrl: { type: String },
-  },
-  { _id: false }
-);
-
-const documentErrandSchema = new mongoose.Schema(
-  {
-    documentType: {
-      id: { type: String },
-      name: { type: String, required: true },
-    },
-    studentName: { type: String, required: true },
-    matricule: { type: String, required: true },
-    faculty: { type: String, required: true },
-    level: { type: String, required: true },
-    program: { type: String, required: true },
-    studentStatus: { type: String, required: true, enum: ["Current", "Past"] },
-    processingMode: { type: String, required: true, enum: ["Fast", "Super Fast"] },
-    additionalNotes: { type: String, default: "" },
-  },
-  { _id: false }
-);
-
-const ticketDataSchema = new mongoose.Schema(
-  {
-    busAgency: { type: String, required: true },
-    seatNumber: { type: String, required: true },
-    passengerName: { type: String, required: true },
-    departureTime: { type: Date, required: true },
-    destination: { type: String, required: true },
-    departureCity: { type: String, required: true },
-    price: { type: Number, default: 0 },
-    backupSeats: { type: [String], default: [] },
-    travelTimeOfDay: {
-      type: String,
-      enum: ["morning", "afternoon", "evening", "night"],
-      default: "morning",
-    },
-    passengerIDNumber: { type: String, default: "" },
-    idPhotoFront: { type: String, default: "" },
-    idPhotoBack: { type: String, default: "" },
-    agencyDetails: {
-      id: { type: String },
-      departureTime: { type: String },
-      arrivalTime: { type: String },
-      busType: { type: String },
-    },
-    serviceFee: { type: Number, default: 1500 },
-    pricePerSeat: { type: Number, default: 0 },
-    seatCount: { type: Number, default: 0 },
-  },
-  { _id: false }
-);
-
-const bulkDataSchema = new mongoose.Schema(
-  {
-    type: { type: String, enum: ["pickup", "delivery"], required: true },
-    parcels: [
       {
-        description: { type: String, required: true },
-        pickupAddress: { type: String },
-        pickupContactName: { type: String },
-        pickupContactPhone: { type: String },
-        deliveryAddress: { type: String },
-        receiverName: { type: String },
-        receiverPhone: { type: String },
+        status: 'accepted',
+        rider: riderId,
+        acceptedAt: new Date(),
+        $inc: { __v: 1 }
       },
-    ],
-    scheduledDate: { type: Date, required: true },
-    scheduledTime: { type: String, required: true },
-    receiverName: { type: String },
-    receiverPhone: { type: String },
-    receiverAddress: { type: String },
-    pickupContactName: { type: String },
-    pickupContactPhone: { type: String },
-    pickupAddress: { type: String },
-  },
-  { _id: false }
-);
+      {
+        new: true,
+        session,
+        runValidators: true
+      }
+    ).populate('user', 'name phone')
+     .populate({
+        path: 'items.product',
+        select: 'name images price featuredImage business',
+        populate: {
+          path: 'business',
+          select: 'name address deliveryTime coordinates phone'
+        }
+      });
 
-const deliveryDataSchema = new mongoose.Schema(
-  {
-    pickupAddress: { type: String, required: true },
-    deliveryAddress: { type: String, required: true },
-    senderNumber: { type: String, required: true },
-    receiverNumber: { type: String, required: true },
-    itemDescription: { type: String, required: true },
-    price: { type: Number, default: 0 },
-  },
-  { _id: false }
-);
+    if (!order) {
+      await session.abortTransaction();
+      console.log(`❌ Order ${orderNumber} not found or already taken`);
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found or already accepted by another rider'
+      });
+    }
 
-// Main order schema
-const orderSchema = new mongoose.Schema(
-  {
-    orderNumber: { type: String, unique: true, required: true },
-    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    rider: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // Update rider's account stats
+    let account = await Account.findOne({ user: riderId }).session(session);
+    if (!account) {
+      account = await Account.create([{
+        user: riderId,
+        status: 'active',
+        vehicleType: 'bike'
+      }], { session });
+      account = account[0];
+    }
 
-    type: {
-      type: String,
-      enum: ["business", "errand", "ticket", "random", "bulk"],
-      default: "business",
-    },
+    account.incrementAccepted();
+    account.updatePerformance(order);
+    await account.save({ session });
 
-    items: [orderItemSchema],
-    errandItems: [errandItemSchema], // legacy (still supported)
-    bulkData: bulkDataSchema,
-    ticketData: ticketDataSchema,
-    deliveryData: deliveryDataSchema,
+    await session.commitTransaction();
+    console.log(`✅ Order ${orderNumber} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
 
-    // ==================== New Errand Fields ====================
-    errandType: {
-      type: String,
-      enum: ["shopping", "bill", "document"],
-      required: function () {
-        return this.type === "errand" && !this.errandItems?.length;
+    // Build response data
+    const responseData = {
+      _id: order._id,
+      orderNumber: order.orderNumber,
+      type: order.type,
+      status: order.status,
+      total: order.total,
+      deliveryFee: order.deliveryFee,
+      customer: {
+        name: order.user?.name || 'Customer',
+        phone: order.user?.phone || order.phone
       },
-    },
-    shoppingErrand: shoppingErrandSchema,
-    billErrand: billErrandSchema,
-    documentErrand: documentErrandSchema,
-    // ===========================================================
+      deliveryAddress: order.deliveryAddress,
+      acceptedAt: order.acceptedAt,
+      createdAt: order.createdAt
+    };
 
-    subtotal: { type: Number, required: true, min: 0 },
-    deliveryFee: { type: Number, required: true, min: 0 },
-    total: { type: Number, required: true, min: 0 },
+    switch (order.type) {
+      case 'business':
+        responseData.items = order.items.map(item => ({
+          name: item.product?.name || 'Product not found',
+          images: item.product?.images || [],
+          featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
+          price: item.price,
+          quantity: item.quantity,
+          business: {
+            name: item.product?.business?.name || 'Business not found',
+            address: item.product?.business?.address || '',
+            phone: item.product?.business?.phone || '',
+            deliveryTime: item.product?.business?.deliveryTime || 'N/A',
+            coordinates: item.product?.business?.coordinates || null
+          }
+        }));
+        break;
 
-    status: {
-      type: String,
-      enum: ["pending", "confirmed", "accepted", "picked_up", "delivered", "cancelled", "rejected"],
-      default: "pending",
-    },
-    paymentStatus: {
-      type: String,
-      enum: ["unpaid", "paid"],
-      default: "unpaid",
-    },
-    paymentMethod: {
-      type: String,
-      enum: ["cash", "momo", "np"],
-      default: "np",
-    },
+      case 'errand':
+        if (order.errandType) {
+          responseData.errandType = order.errandType;
+          switch (order.errandType) {
+            case 'shopping':
+              responseData.shoppingErrand = order.shoppingErrand;
+              break;
+            case 'bill':
+              responseData.billErrand = order.billErrand;
+              break;
+            case 'document':
+              responseData.documentErrand = order.documentErrand;
+              break;
+          }
+        }
+        if (order.errandItems && order.errandItems.length > 0) {
+          responseData.errandItems = order.errandItems;
+        }
+        break;
 
-    deliveryAddress: { type: String, required: true },
-    phone: { type: String, required: true },
-    notes: { type: String, default: "" },
-    distance: { type: Number, default: 0 },
+      case 'ticket':
+        responseData.ticketData = order.ticketData;
+        break;
 
-    confirmedAt: { type: Date },
-    acceptedAt: { type: Date },
-    rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    rejectedAt: { type: Date },
-    pickedUpAt: { type: Date },
-    deliveredAt: { type: Date },
-    cancelledAt: { type: Date },
+      case 'random':
+        responseData.deliveryData = order.deliveryData;
+        break;
 
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    isAdminCreated: { type: Boolean, default: false },
-  },
-  { timestamps: true }
-);
+      case 'bulk':
+        responseData.bulkData = order.bulkData;
+        break;
+    }
 
-// Indexes
-orderSchema.index({ type: 1, status: 1, createdAt: -1 });
-orderSchema.index({ user: 1, createdAt: -1 });
-orderSchema.index({ orderNumber: 1 });
-orderSchema.index({ rider: 1, status: 1 });
+    res.json({
+      success: true,
+      data: responseData,
+      message: 'Delivery accepted successfully!'
+    });
 
-module.exports = mongoose.model("Order", orderSchema);
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('❌ ACCEPT DELIVERY - Error:', error);
+
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid order number'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to accept delivery',
+      error: error.message
+    });
+  } finally {
+    session.endSession();
+  }
+};
+
+module.exports = { acceptDelivery };
