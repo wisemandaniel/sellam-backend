@@ -1446,7 +1446,7 @@ const acceptDelivery = async (req, res) => {
       });
     }
 
-    // 🔍 Check if rider profile is complete
+    // 🔍 Check if rider exists
     const rider = await User.findById(riderId).session(session);
     if (!rider) {
       await session.abortTransaction();
@@ -1456,12 +1456,21 @@ const acceptDelivery = async (req, res) => {
       });
     }
 
-    // Use the isProfileComplete field from the model
+    // ✅ Profile completeness check
     if (!rider.isProfileComplete) {
       await session.abortTransaction();
       return res.status(200).json({
         success: false,
         message: 'Please complete your profile before accepting deliveries.'
+      });
+    }
+
+    // ✅ Approval check (specific to riders)
+    if (!rider.isApproved) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Your account is pending approval. You cannot accept deliveries yet.'
       });
     }
 
@@ -1627,6 +1636,8 @@ const acceptDelivery = async (req, res) => {
     session.endSession();
   }
 };
+
+module.exports = { acceptDelivery };
 
 // Reject delivery
 const rejectDelivery = async (req, res) => {
