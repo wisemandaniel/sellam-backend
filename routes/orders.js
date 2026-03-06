@@ -47,7 +47,7 @@ router.patch('/:orderNumber/confirm', confirmOrder);
 router.get('/status/confirmed', authorize('rider', 'admin'), getConfirmedOrders);
 router.get('/my-deliveries/active', authorize('rider', 'admin'), getMyActiveDeliveries);
 router.get('/my-deliveries/completed', authorize('rider', 'admin'), getMyCompletedDeliveries);
-router.patch('/:orderId/accept', authorize('rider', 'admin'), acceptDelivery);
+router.patch('/:orderId/accept', authorize('rider', 'admin'), cl);
 router.patch('/:orderId/reject', authorize('rider', 'admin'), rejectDelivery);
 router.patch('/:orderId/status', updateOrderStatus);
 
