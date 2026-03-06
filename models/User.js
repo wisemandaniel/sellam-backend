@@ -244,7 +244,7 @@ userSchema.methods.generateAuthToken = function () {
 
 // Check if profile is complete (name, address, phone, profileImage)
 userSchema.methods.checkProfileComplete = function () {
-  this.isProfileComplete = !!(this.name && this.address && this.phone && this.profileImage);
+  this.isProfileComplete = !!(this.name && this.address && this.phone);
   return this.isProfileComplete;
 };
 
