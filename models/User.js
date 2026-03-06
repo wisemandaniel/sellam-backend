@@ -58,6 +58,9 @@ const userSchema = new mongoose.Schema(
     },
     licensePlate: { type: String, default: "" },
     
+    // ✅ NEW FIELD: Approval status for riders (admin approval)
+    isApproved: { type: Boolean, default: false },
+    
     // Rating and ranking system
     rating: { type: Number, default: 4.5, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0 },
@@ -98,9 +101,9 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ==================== HOOKS ====================
+// ==================== MIDDLEWARE ====================
 
-// Pre-save: hash password and compute profile completeness & active status
+// Pre-save: hash password, compute profile completeness & active status
 userSchema.pre('save', async function(next) {
   if (this.isModified('password')) {
     try {
@@ -129,6 +132,15 @@ userSchema.pre('findOneAndUpdate', async function(next) {
   if (update.$set) {
     for (const field of relevantFields) {
       if (update.$set[field] !== undefined) {
+        shouldRecalc = true;
+        break;
+      }
+    }
+  }
+  // Also check if any relevant field is being unset (removed)
+  if (update.$unset) {
+    for (const field of relevantFields) {
+      if (update.$unset[field] !== undefined) {
         shouldRecalc = true;
         break;
       }
@@ -420,4 +432,6 @@ userSchema.statics.fixAllRankings = async function () {
   }
 };
 
-module.exports = mongoose.model("User", userSchema);
+// ==================== EXPORT ====================
+// Use safe export pattern to avoid model overwrite errors
+module.exports = mongoose.models.User || mongoose.model("User", userSchema);
