@@ -58,6 +58,9 @@ const userSchema = new mongoose.Schema(
     },
     licensePlate: { type: String, default: "" },
     
+    // ✅ NEW FIELD: Approval status for riders (admin approval)
+    isApproved: { type: Boolean, default: false },
+    
     // Rating and ranking system
     rating: { type: Number, default: 4.5, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0 },
@@ -98,18 +101,113 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Hash password before saving
+// ==================== MIDDLEWARE ====================
+
+// Pre-save: hash password, compute profile completeness & active status
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+  if (this.isModified('password')) {
+    try {
+      const salt = await bcrypt.genSalt(parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12);
+      this.password = await bcrypt.hash(this.password, salt);
+    } catch (error) {
+      return next(error);
+    }
+  }
   
+  this.checkProfileComplete();
+  this.computeIsActive();
+  next();
+});
+
+// Pre-update middleware for findOneAndUpdate
+// Ensures isProfileComplete is recalculated when relevant fields change
+userSchema.pre('findOneAndUpdate', async function(next) {
+  const update = this.getUpdate();
+  
+  // Fields that affect profile completeness
+  const relevantFields = ['name', 'address', 'phone', 'profileImage'];
+  
+  // Check if any relevant field is being modified
+  let shouldRecalc = false;
+  if (update.$set) {
+    for (const field of relevantFields) {
+      if (update.$set[field] !== undefined) {
+        shouldRecalc = true;
+        break;
+      }
+    }
+  }
+  // Also check if any relevant field is being unset (removed)
+  if (update.$unset) {
+    for (const field of relevantFields) {
+      if (update.$unset[field] !== undefined) {
+        shouldRecalc = true;
+        break;
+      }
+    }
+  }
+  
+  if (shouldRecalc) {
+    // Fetch the document to merge with updates
+    const docToUpdate = await this.model.findOne(this.getQuery()).session(this.getOptions().session);
+    if (docToUpdate) {
+      // Apply the updates to the document (in memory)
+      if (update.$set) {
+        Object.assign(docToUpdate, update.$set);
+      }
+      if (update.$unset) {
+        for (const field of Object.keys(update.$unset)) {
+          docToUpdate[field] = undefined;
+        }
+      }
+      
+      // Recompute profile completeness on the merged document
+      docToUpdate.checkProfileComplete();
+      
+      // Add isProfileComplete to the update operation
+      if (!update.$set) update.$set = {};
+      update.$set.isProfileComplete = docToUpdate.isProfileComplete;
+    }
+  }
+  
+  next();
+});
+
+// Post-save: sync with Account model and trigger ranking update
+userSchema.post("save", async function (doc) {
   try {
-    const salt = await bcrypt.genSalt(parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
+    const Account = require("./Account");
+    const account = await Account.findOne({ user: doc._id });
+
+    if (account) {
+      const desiredStatus = doc.isActive ? "active" : "inactive";
+      if (account.status !== desiredStatus) {
+        account.status = desiredStatus;
+        await account.save();
+      }
+    } else if (doc.role === "rider") {
+      await Account.create({
+        user: doc._id,
+        vehicleType: doc.vehicleType,
+        status: doc.isActive ? "active" : "inactive",
+      });
+    }
+
+    if (doc.role === 'rider') {
+      setTimeout(async () => {
+        try {
+          await mongoose.model('User').updateAllRankings();
+        } catch (error) {
+          console.error('Error updating rankings after user save:', error);
+        }
+      }, 1000);
+    }
+  } catch (err) {
+    console.error("Error syncing account after user save:", err.message);
   }
 });
+
+// ==================== METHODS ====================
 
 // Compare password method
 userSchema.methods.comparePassword = async function(candidatePassword) {
@@ -144,13 +242,13 @@ userSchema.methods.generateAuthToken = function () {
   return token;
 };
 
-// Check if profile is complete
+// Check if profile is complete (name, address, phone, profileImage)
 userSchema.methods.checkProfileComplete = function () {
-  this.isProfileComplete = !!(this.name && this.address && this.phone && this.profileImage);
+  this.isProfileComplete = !!(this.name && this.address && this.phone);
   return this.isProfileComplete;
 };
 
-// Compute isActive
+// Compute isActive (profile complete + phone verified)
 userSchema.methods.computeIsActive = function () {
   this.isActive = !!(this.isProfileComplete && this.phoneVerified);
   return this.isActive;
@@ -221,7 +319,43 @@ userSchema.methods.updateRanking = async function () {
   }
 };
 
-// STATIC METHOD: Update ALL rankings at once for consistency
+// Get ranking as formatted string
+userSchema.methods.getRankingString = function () {
+  const { rank, totalAgents } = this.ranking;
+  if (rank === 0 || totalAgents === 0) return 'Unranked';
+  return `${rank}/${totalAgents}`;
+};
+
+// Push delivery metadata
+userSchema.methods.pushDeliveryMeta = function (deliveryMeta) {
+  if (!this.totalDeliveries) {
+    this.totalDeliveries = { count: 0, deliveries: [] };
+  }
+  
+  this.totalDeliveries.deliveries.unshift(deliveryMeta);
+  this.totalDeliveries.count = (this.totalDeliveries.count || 0) + 1;
+
+  const MAX_DELIVERIES_STORED = Number(process.env.MAX_DELIVERIES_STORED) || 1000;
+  if (this.totalDeliveries.deliveries.length > MAX_DELIVERIES_STORED) {
+    this.totalDeliveries.deliveries = this.totalDeliveries.deliveries.slice(0, MAX_DELIVERIES_STORED);
+  }
+
+  if (this.role === 'rider' && deliveryMeta.status === 'completed') {
+    console.log(`📦 Delivery completed, updating ALL rankings...`);
+    
+    setTimeout(async () => {
+      try {
+        await mongoose.model('User').updateAllRankings();
+      } catch (error) {
+        console.error('Error updating rankings after delivery:', error);
+      }
+    }, 1000);
+  }
+};
+
+// ==================== STATIC METHODS ====================
+
+// Update ALL rankings at once for consistency
 userSchema.statics.updateAllRankings = async function () {
   try {
     console.log('🔄 UPDATING ALL RANKINGS CONSISTENTLY...');
@@ -278,40 +412,6 @@ userSchema.statics.updateAllRankings = async function () {
   }
 };
 
-// Get ranking as formatted string
-userSchema.methods.getRankingString = function () {
-  const { rank, totalAgents } = this.ranking;
-  if (rank === 0 || totalAgents === 0) return 'Unranked';
-  return `${rank}/${totalAgents}`;
-};
-
-// Push delivery metadata
-userSchema.methods.pushDeliveryMeta = function (deliveryMeta) {
-  if (!this.totalDeliveries) {
-    this.totalDeliveries = { count: 0, deliveries: [] };
-  }
-  
-  this.totalDeliveries.deliveries.unshift(deliveryMeta);
-  this.totalDeliveries.count = (this.totalDeliveries.count || 0) + 1;
-
-  const MAX_DELIVERIES_STORED = Number(process.env.MAX_DELIVERIES_STORED) || 1000;
-  if (this.totalDeliveries.deliveries.length > MAX_DELIVERIES_STORED) {
-    this.totalDeliveries.deliveries = this.totalDeliveries.deliveries.slice(0, MAX_DELIVERIES_STORED);
-  }
-
-  if (this.role === 'rider' && deliveryMeta.status === 'completed') {
-    console.log(`📦 Delivery completed, updating ALL rankings...`);
-    
-    setTimeout(async () => {
-      try {
-        await mongoose.model('User').updateAllRankings();
-      } catch (error) {
-        console.error('Error updating rankings after delivery:', error);
-      }
-    }, 1000);
-  }
-};
-
 // EMERGENCY FIX: Force update ranking for all riders
 userSchema.statics.fixAllRankings = async function () {
   try {
@@ -332,47 +432,6 @@ userSchema.statics.fixAllRankings = async function () {
   }
 };
 
-// Pre-save hook
-userSchema.pre("save", function (next) {
-  this.checkProfileComplete();
-  this.computeIsActive();
-  next();
-});
-
-// Post-save hook
-userSchema.post("save", async function (doc) {
-  try {
-    const Account = require("./Account");
-    const account = await Account.findOne({ user: doc._id });
-
-    if (account) {
-      const desiredStatus = doc.isActive ? "active" : "inactive";
-      if (account.status !== desiredStatus) {
-        account.status = desiredStatus;
-        await account.save();
-      }
-    } else if (doc.role === "rider") {
-      await Account.create({
-        user: doc._id,
-        vehicleType: doc.vehicleType,
-        status: doc.isActive ? "active" : "inactive",
-      });
-    }
-
-    if (doc.role === 'rider') {
-      setTimeout(async () => {
-        try {
-          await mongoose.model('User').updateAllRankings();
-        } catch (error) {
-          console.error('Error updating rankings after user save:', error);
-        }
-      }, 1000);
-    }
-  } catch (err) {
-    console.error("Error syncing account after user save:", err.message);
-  }
-});
-
-
-
-module.exports = mongoose.model("User", userSchema);
+// ==================== EXPORT ====================
+// Use safe export pattern to avoid model overwrite errors
+module.exports = mongoose.models.User || mongoose.model("User", userSchema);
