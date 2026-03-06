@@ -1731,30 +1731,57 @@ const acceptDelivery = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { orderId } = req.params;
+    const { orderNumber } = req.params;
     const riderId = req.user._id;
 
-    console.log(`🚀 Rider ${riderId} attempting to accept order ${orderId}`);
+    console.log(`🚀 Rider ${riderId} attempting to accept order ${orderNumber}`);
 
-    // Validate input
-    if (!orderId) {
+    if (!orderNumber) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
-        message: 'Order ID is required'
+        message: 'Order number is required'
       });
     }
 
-    // Find and update order with acceptedAt
+    // 🔍 Check if rider exists
+    const rider = await User.findById(riderId).session(session);
+    if (!rider) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: 'Rider not found'
+      });
+    }
+
+    // ✅ Profile completeness check
+    if (!rider.isProfileComplete) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Please complete your profile before accepting deliveries.'
+      });
+    }
+
+    // ✅ Approval check
+    if (!rider.isApproved) {
+      await session.abortTransaction();
+      return res.status(200).json({
+        success: false,
+        message: 'Your account is pending approval. You cannot accept deliveries yet.'
+      });
+    }
+
+    // ✅ Attempt to accept the order (fixed query)
     const order = await Order.findOneAndUpdate(
       {
-        _id: orderId,
-        status: 'pending'
+        orderNumber: orderNumber,   // ✅ search by orderNumber
+        status: 'confirmed'          // or 'pending' – adjust as needed
       },
       {
         status: 'accepted',
         rider: riderId,
-        acceptedAt: new Date(), 
+        acceptedAt: new Date(),
         $inc: { __v: 1 }
       },
       {
@@ -1774,17 +1801,16 @@ const acceptDelivery = async (req, res) => {
 
     if (!order) {
       await session.abortTransaction();
-      console.log(`❌ Order ${orderId} not found or already taken`);
+      console.log(`❌ Order ${orderNumber} not found or already taken`);
       return res.status(404).json({
         success: false,
         message: 'Order not found or already accepted by another rider'
       });
     }
 
-    // Update rider's account with performance data
+    // Update rider's account stats (unchanged)
     let account = await Account.findOne({ user: riderId }).session(session);
     if (!account) {
-      // Create account if it doesn't exist
       account = await Account.create([{
         user: riderId,
         status: 'active',
@@ -1793,15 +1819,14 @@ const acceptDelivery = async (req, res) => {
       account = account[0];
     }
 
-    // ✅ FIX: Update account performance with the accepted order
     account.incrementAccepted();
-    account.updatePerformance(order); // This will include acceptedAt
+    account.updatePerformance(order);
     await account.save({ session });
 
     await session.commitTransaction();
-    console.log(`✅ Order ${orderId} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
+    console.log(`✅ Order ${orderNumber} successfully accepted by rider ${riderId} at ${order.acceptedAt}`);
 
-    // Format response
+    // Build response (unchanged)
     const responseData = {
       _id: order._id,
       orderNumber: order.orderNumber,
@@ -1814,11 +1839,11 @@ const acceptDelivery = async (req, res) => {
         phone: order.user?.phone || order.phone
       },
       deliveryAddress: order.deliveryAddress,
-      acceptedAt: order.acceptedAt, // ✅ Now properly set
+      acceptedAt: order.acceptedAt,
       createdAt: order.createdAt
     };
 
-    // Add type-specific items
+    // Add type-specific data (unchanged)
     switch (order.type) {
       case 'business':
         responseData.items = order.items.map(item => ({
@@ -1863,7 +1888,7 @@ const acceptDelivery = async (req, res) => {
     if (error.name === 'CastError') {
       return res.status(400).json({
         success: false,
-        message: 'Invalid order ID'
+        message: 'Invalid order number'  // updated message
       });
     }
 
