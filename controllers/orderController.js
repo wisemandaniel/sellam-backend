@@ -1192,10 +1192,10 @@ const getOrder = async (req, res) => {
   }
 };
 
-// Get all pending orders (for riders/drivers)
+// Get all confirmed orders (for riders/drivers)
 const getConfirmedOrders = async (req, res) => {
   try {
-    console.log('📦 Fetching pending orders...');
+    console.log('📦 Fetching confirmed orders II...');
 
     const pendingOrders = await Order.find({ status: 'confirmed' })
       .populate({
@@ -1213,7 +1213,7 @@ const getConfirmedOrders = async (req, res) => {
       .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt updatedAt')
       .sort({ createdAt: -1 });
 
-    console.log(`✅ Found ${pendingOrders.length} pending orders`);
+    console.log(`✅ Found ${pendingOrders.length} confirmed orders`);
 
     const formattedOrders = pendingOrders.map(order => {
       const baseOrder = {
@@ -1296,14 +1296,14 @@ const getConfirmedOrders = async (req, res) => {
       success: true,
       count: formattedOrders.length,
       data: formattedOrders,
-      message: `Found ${formattedOrders.length} pending orders`
+      message: `Found ${formattedOrders.length} confirmed orders`
     });
 
   } catch (error) {
-    console.error('❌ Get pending orders error:', error);
+    console.error('❌ Get confirmed orders error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch pending orders',
+      message: 'Failed to fetch confirmed orders',
       error: error.message
     });
   }
