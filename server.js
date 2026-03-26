@@ -58,6 +58,8 @@ app.get('/api/health', (req, res) => {
     networkIP: networkIP,
     port: PORT
   });
+
+  res.status(200).send('OK');
 });
 
 // API Routes

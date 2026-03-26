@@ -919,7 +919,7 @@ const getOrderByNumber = async (req, res) => {
         select: 'name images price featuredImage business',
         populate: {
           path: 'business',
-          select: 'name deliveryTime'
+          select: 'name address phone deliveryTime _id'
         }
       });
 
@@ -991,6 +991,8 @@ const getOrderByNumber = async (req, res) => {
     switch (order.type) {
       case 'business':
         responseData.items = order.items.map((item) => ({
+          product: item.product?._id,                     // ← actual product ID
+          store: item.product?.business?._id,             // ← actual store ID
           name: item.product?.name,
           images: item.product?.images || [],
           featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -1044,7 +1046,7 @@ const getOrderByNumber = async (req, res) => {
   }
 };
 
-// Get user orders
+// Get user orders - FIXED to include product and store IDs
 const getMyOrders = async (req, res) => {
   try {
     const orders = await Order.find({ user: req.user._id })
@@ -1053,7 +1055,7 @@ const getMyOrders = async (req, res) => {
         select: 'name images price featuredImage business',
         populate: {
           path: 'business',
-          select: 'name deliveryTime'
+          select: 'name deliveryTime _id'  // ← include business _id
         }
       })
       .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt deliveredAt paymentStatus paymentMethod')
@@ -1080,6 +1082,8 @@ const getMyOrders = async (req, res) => {
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
+            product: item.product?._id,                 // ← actual product ID
+            store: item.product?.business?._id,         // ← actual store ID (business)
             name: item.product?.name || 'Product not found',
             images: item.product?.images || [],
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -1207,7 +1211,7 @@ const getConfirmedOrders = async (req, res) => {
         select: 'name images price category featuredImage business',
         populate: {
           path: 'business',
-          select: 'name phone address deliveryTime coordinates'
+          select: 'name phone address deliveryTime coordinates _id'  // ← include _id
         }
       })
       .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt updatedAt')
@@ -1238,6 +1242,8 @@ const getConfirmedOrders = async (req, res) => {
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
+            product: item.product?._id,                 // ← actual product ID
+            store: item.product?.business?._id,         // ← actual store ID
             name: item.product?.name || 'Product not found',
             images: item.product?.images || [],
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -1326,7 +1332,7 @@ const getMyCompletedDeliveries = async (req, res) => {
       select: 'name images price featuredImage business',
       populate: {
         path: 'business',
-        select: 'name address deliveryTime coordinates phone'
+        select: 'name address deliveryTime coordinates phone _id'
       }
     })
     .select('orderNumber type status total deliveryFee items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
@@ -1359,6 +1365,8 @@ const getMyCompletedDeliveries = async (req, res) => {
       switch (order.type) {
         case 'business':
           baseDelivery.items = order.items.map(item => ({
+            product: item.product?._id,                 // ← actual product ID
+            store: item.product?.business?._id,         // ← actual store ID
             name: item.product?.name || 'Product not found',
             images: item.product?.images || [],
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -1511,7 +1519,7 @@ const acceptDelivery = async (req, res) => {
         select: 'name images price featuredImage business',
         populate: {
           path: 'business',
-          select: 'name address deliveryTime coordinates phone'
+          select: 'name address deliveryTime coordinates phone _id'
         }
       });
 
@@ -1562,6 +1570,8 @@ const acceptDelivery = async (req, res) => {
     switch (order.type) {
       case 'business':
         responseData.items = order.items.map(item => ({
+          product: item.product?._id,
+          store: item.product?.business?._id,
           name: item.product?.name || 'Product not found',
           images: item.product?.images || [],
           featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -1750,7 +1760,7 @@ const getMyActiveDeliveries = async (req, res) => {
       select: 'name images price featuredImage business',
       populate: {
         path: 'business',
-        select: 'name address deliveryTime coordinates phone'
+        select: 'name address deliveryTime coordinates phone _id'
       }
     })
     .select('orderNumber type status total deliveryFee items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt')
@@ -1783,6 +1793,8 @@ const getMyActiveDeliveries = async (req, res) => {
       switch (order.type) {
         case 'business':
           baseDelivery.items = order.items.map(item => ({
+            product: item.product?._id,
+            store: item.product?.business?._id,
             name: item.product?.name || 'Product not found',
             images: item.product?.images || [],
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -1914,7 +1926,7 @@ const updateOrderStatus = async (req, res) => {
             select: 'name images price featuredImage business',
             populate: {
               path: 'business',
-              select: 'name address phone'
+              select: 'name address phone _id'
             }
           });
 
@@ -2007,7 +2019,7 @@ const updateOrderStatus = async (req, res) => {
           select: 'name images price featuredImage business',
           populate: {
             path: 'business',
-            select: 'name address phone'
+            select: 'name address phone _id'
           }
         });
 
@@ -2098,7 +2110,7 @@ const getAllOrders = async (req, res) => {
         select: 'name images price featuredImage business',
         populate: {
           path: 'business',
-          select: 'name phone address deliveryTime'
+          select: 'name phone address deliveryTime _id'
         }
       })
       .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt createdBy isAdminCreated paymentStatus paymentMethod distance rejectedBy rejectedAt')
@@ -2144,6 +2156,8 @@ const getAllOrders = async (req, res) => {
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
+            product: item.product?._id,                 // ← actual product ID
+            store: item.product?.business?._id,         // ← actual store ID
             name: item.product?.name || 'Product not found',
             images: item.product?.images || [],
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -2299,6 +2313,8 @@ const updateOrder = async (req, res) => {
 
     if (updatedOrder.type === 'business') {
       responseData.items = updatedOrder.items.map(item => ({
+        product: item.product?._id,
+        store: item.product?.business?._id,
         name: item.product?.name || 'Product not found',
         images: item.product?.images || [],
         featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -2772,7 +2788,7 @@ const getRiderOrders = async (req, res) => {
         select: 'name images price featuredImage business',
         populate: {
           path: 'business',
-          select: 'name address phone deliveryTime'
+          select: 'name address phone deliveryTime _id'
         }
       })
       .select('orderNumber type status total deliveryFee subtotal items errandItems errandType shoppingErrand billErrand documentErrand ticketData deliveryData bulkData deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt rejectedAt paymentStatus paymentMethod distance')
@@ -2826,6 +2842,8 @@ const getRiderOrders = async (req, res) => {
       switch (order.type) {
         case 'business':
           baseOrder.items = order.items.map(item => ({
+            product: item.product?._id,
+            store: item.product?.business?._id,
             name: item.product?.name || 'Product not found',
             images: item.product?.images || [],
             featuredImage: item.product?.featuredImage || (item.product?.images?.[0] || ''),
@@ -2965,7 +2983,9 @@ const getRiderOrders = async (req, res) => {
   }
 };
 
-// Get orders by business ID
+// @desc    Get orders by business ID (FINAL FIXED VERSION)
+// @route   GET /api/orders/business/:businessId
+// @access  Private/BusinessOwner/Admin
 const getOrdersByBusiness = async (req, res) => {
   try {
     const { businessId } = req.params;
@@ -3019,7 +3039,7 @@ const getOrdersByBusiness = async (req, res) => {
         select: 'name images price featuredImage category business',
         populate: {
           path: 'business',
-          select: 'name phone address deliveryTime'
+          select: 'name phone address deliveryTime _id'
         }
       })
       .select('orderNumber type status total deliveryFee subtotal items deliveryAddress phone notes createdAt acceptedAt pickedUpAt deliveredAt cancelledAt paymentStatus paymentMethod')
@@ -3089,6 +3109,8 @@ const getOrdersByBusiness = async (req, res) => {
         isAdminCreated: order.isAdminCreated || false,
         rejectedBy: order.rejectedBy,
         items: businessItems.map(item => ({
+          product: item.product?._id,
+          store: item.product?.business?._id,
           name: item.product.name,
           images: item.product.images || [],
           featuredImage: item.product.featuredImage || (item.product.images?.[0] || ''),
@@ -3425,117 +3447,11 @@ const getBusinessOrderStats = async (req, res) => {
   }
 };
 
-// Cancel order (customer only)
-const cancelOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { orderNumber } = req.params;
-    const userId = req.user._id;
-
-    const order = await Order.findOne({
-      orderNumber: orderNumber,
-      user: userId,
-    }).session(session);
-
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found or you are not authorized',
-      });
-    }
-
-    if (order.status !== 'pending') {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot cancel order in "${order.status}" status. Only pending orders can be cancelled.`,
-      });
-    }
-
-    order.status = 'cancelled';
-    order.cancelledAt = new Date();
-    await order.save({ session });
-
-    await session.commitTransaction();
-
-    res.json({
-      success: true,
-      data: {
-        orderNumber: order.orderNumber,
-        status: order.status,
-        cancelledAt: order.cancelledAt,
-      },
-      message: 'Order cancelled successfully',
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    console.error('❌ Cancel order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to cancel order',
-      error: error.message,
-    });
-  } finally {
-    session.endSession();
-  }
-};
-
-// Delete my order (customer only)
-const deleteMyOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { orderNumber } = req.params;
-    const userId = req.user._id;
-
-    console.log('orderNumber:::', orderNumber);
-
-    const order = await Order.findOne({
-      orderNumber: orderNumber,
-      user: userId,
-    }).session(session);
-
-    if (!order) {
-      await session.abortTransaction();
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found or you are not authorized',
-      });
-    }
-
-    if (!['cancelled', 'pending'].includes(order.status)) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete order in "${order.status}" status. Only cancelled or pending orders can be deleted.`,
-      });
-    }
-
-    await Order.deleteOne({ _id: order._id }).session(session);
-    await session.commitTransaction();
-
-    res.json({
-      success: true,
-      message: 'Order deleted successfully',
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    console.error('❌ Delete order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete order',
-      error: error.message,
-    });
-  } finally {
-    session.endSession();
-  }
-};
-
-// Confirm order after payment
+/**
+ * @desc    Confirm an order after successful payment
+ * @route   PATCH /api/orders/order-number/:orderNumber/confirm
+ * @access  Private (order owner)
+ */
 const confirmOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
