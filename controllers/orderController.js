@@ -1,7 +1,6 @@
 /**
  * controllers/orderController.js
- * Full delivery/order logic with WhatsApp notifications via WASenderApi.
- * Includes 6-second delays and retry logic.
+ * Full delivery/order logic – notifications handled by external service.
  */
 
 const Order = require("../models/Order");
@@ -12,147 +11,16 @@ const Store = require("../models/Store");
 const Business = require("../models/Business");
 const mongoose = require("mongoose");
 
-const { sendOrderNotification } = require("../services/messageServices");
+// Import notification helpers
+const {
+  notifyClient,
+  notifyRiders,
+  notifyBusinessesForOrder,
+  notifyAdmin,
+} = require("../services/notificationServices");
 
 // ================================
-// HELPER: SLEEP FOR RATE LIMITING
-// ================================
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// ================================
-// HELPER: NOTIFICATION FORMATTING
-// ================================
-
-const formatPhoneNumber = (phone) => {
-  if (!phone) return null;
-  const cleaned = String(phone).replace(/\D/g, "");
-  if (cleaned.startsWith("237") && cleaned.length === 12) return `+${cleaned}`;
-  if (cleaned.length === 9 && /^[6-9]/.test(cleaned)) return `+237${cleaned}`;
-  if (cleaned.length === 12) return `+${cleaned}`;
-  if (phone.startsWith("+") && phone.length >= 8) return phone;
-  return null;
-};
-
-const getRiderPhones = async () => {
-  const riders = await User.find({ role: "rider", isApproved: true, isActive: true }).select("phone");
-  return riders.map(r => formatPhoneNumber(r.phone)).filter(Boolean);
-};
-
-const notifyRecipient = async (phoneNumber, orderDetails) => {
-  if (!phoneNumber) return;
-  try {
-    await sendOrderNotification(phoneNumber, orderDetails);
-    console.log(`✅ Notification sent to ${phoneNumber} for order ${orderDetails.orderNumber}`);
-  } catch (err) {
-    if (err.message && err.message.includes('JID does not exist')) {
-      console.warn(`⚠️ Phone ${phoneNumber} is not a WhatsApp account – skipping`);
-    } else {
-      console.error(`❌ Failed to send notification to ${phoneNumber}:`, err.message);
-    }
-  }
-};
-
-const notifyClient = async (order, status, extra = {}) => {
-  const clientPhone = formatPhoneNumber(order.phone);
-  if (!clientPhone) return;
-  const orderDetails = {
-    orderNumber: order.orderNumber,
-    status: status,
-    type: order.type,
-    items: order.items?.map(item => ({
-      name: item.product?.name || item.name,
-      quantity: item.quantity,
-      price: item.price,
-    })) || [],
-    errandItems: order.errandItems || [],
-    ticketData: order.ticketData || {},
-    deliveryData: order.deliveryData || {},
-    bulkData: order.bulkData || {},
-    subtotal: order.subtotal,
-    deliveryFee: order.deliveryFee,
-    total: order.total,
-    deliveryAddress: order.deliveryAddress,
-    pickupAddress: order.deliveryData?.pickupAddress || order.bulkData?.pickupAddress || '',
-    customerName: order.user?.name || '',
-    notes: order.notes,
-    createdAt: order.createdAt,
-    riderName: extra.riderName || null,
-  };
-  await notifyRecipient(clientPhone, orderDetails);
-};
-
-const notifyRiders = async (order) => {
-  const riderPhones = await getRiderPhones();
-  if (riderPhones.length === 0) return;
-  const orderDetails = {
-    orderNumber: order.orderNumber,
-    status: "New Order Available",
-    type: order.type,
-    total: order.total,
-    deliveryAddress: order.deliveryAddress,
-    itemsCount: order.items ? order.items.length : 0,
-    subtotal: order.subtotal,
-    deliveryFee: order.deliveryFee,
-    customerName: order.user?.name || '',
-    notes: order.notes,
-    createdAt: order.createdAt,
-  };
-  for (let i = 0; i < riderPhones.length; i++) {
-    await notifyRecipient(riderPhones[i], orderDetails);
-    if (i < riderPhones.length - 1) await sleep(6000); // 6 seconds delay
-  }
-  console.log(`Notified ${riderPhones.length} riders about order ${order.orderNumber}`);
-};
-
-const notifyAdmin = async (order, type) => {
-  const adminPhone = process.env.ADMIN_NOTIFICATION_PHONE;
-  if (!adminPhone) return;
-  const orderDetails = {
-    orderNumber: order.orderNumber,
-    status: `New ${type} order`,
-    type: type,
-    total: order.total,
-    itemsCount: type === "errand" ? (order.errandItems?.length || 0) : 1,
-    deliveryAddress: order.deliveryAddress,
-    customerName: order.user?.name || '',
-    createdAt: order.createdAt,
-  };
-  await notifyRecipient(adminPhone, orderDetails);
-};
-
-const notifyBusinessesForOrder = async (order) => {
-  const businessIds = [...new Set(order.items.map(item => item.business?.toString()).filter(Boolean))];
-  if (businessIds.length === 0) return;
-  const businesses = await Store.find({ _id: { $in: businessIds } }).select("phone whatsappNumber name");
-  for (let i = 0; i < businesses.length; i++) {
-    const biz = businesses[i];
-    const bizPhone = formatPhoneNumber(biz.whatsappNumber || biz.phone);
-    if (!bizPhone) continue;
-    const businessItems = order.items.filter(item => item.business?.toString() === biz._id.toString());
-    const bizSubtotal = businessItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const orderDetails = {
-      orderNumber: order.orderNumber,
-      status: "New Order",
-      type: "business",
-      total: bizSubtotal,
-      itemsCount: businessItems.length,
-      items: businessItems.map(item => ({
-        name: item.product?.name || item.name,
-        quantity: item.quantity,
-        price: item.price,
-      })),
-      deliveryAddress: order.deliveryAddress,
-      customerName: order.user?.name || '',
-      notes: order.notes,
-      createdAt: order.createdAt,
-    };
-    await notifyRecipient(bizPhone, orderDetails);
-    if (i < businesses.length - 1) await sleep(6000); // 6 seconds delay
-  }
-};
-
-// ================================
-// ORDER VALIDATION FUNCTIONS (original)
+// ORDER VALIDATION FUNCTIONS (unchanged)
 // ================================
 const validateErrandItems = (items) => {
   if (!items || items.length === 0) throw new Error("Errand must have at least one item");
@@ -447,11 +315,9 @@ const createOrder = async (req, res) => {
 };
 
 // ================================
-// CONFIRM ORDER (customer) – also accessible by admin
+// CONFIRM ORDER (customer)
 // ================================
 const confirmOrder = async (req, res) => {
-  console.log(`🔔 [confirmOrder] CALLED with orderNumber: ${req.params.orderNumber}, pm: ${req.query.pm}, user role: ${req.user?.role}, userId: ${req.user?._id}`);
-
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -459,14 +325,12 @@ const confirmOrder = async (req, res) => {
     const { orderNumber } = req.params;
     const userId = req.user._id;
     const paymentMethod = req.query.pm || 'momo';
-    console.log(`[1] orderNumber=${orderNumber}, userId=${userId}, paymentMethod=${paymentMethod}`);
 
     const allowedMethods = ['cash', 'momo'];
     if (!allowedMethods.includes(paymentMethod)) {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'Invalid payment method' });
     }
-    console.log(`[2] payment method allowed`);
 
     let order;
     if (req.user.role === 'admin') {
@@ -474,7 +338,6 @@ const confirmOrder = async (req, res) => {
     } else {
       order = await Order.findOne({ orderNumber, user: userId }).session(session);
     }
-    console.log(`[3] order found? ${!!order}, status=${order?.status}`);
 
     if (!order) {
       await session.abortTransaction();
@@ -488,7 +351,6 @@ const confirmOrder = async (req, res) => {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: `Cannot confirm order with status "${order.status}"` });
     }
-    console.log(`[4] order status is pending, proceeding to update`);
 
     order.status = 'confirmed';
     order.paymentMethod = paymentMethod;
@@ -496,13 +358,10 @@ const confirmOrder = async (req, res) => {
     else order.paymentStatus = 'unpaid';
     order.confirmedAt = new Date();
     await order.save({ session });
-    console.log(`[5] order saved, confirmedAt=${order.confirmedAt}`);
 
     await session.commitTransaction();
-    console.log(`[6] transaction committed`);
 
-    // Re-populate order
-    console.log(`[7] re-populating order...`);
+    // Re‑populate order for notifications
     const populatedOrder = await Order.findById(order._id)
       .populate('user', 'name phone')
       .populate({
@@ -510,28 +369,27 @@ const confirmOrder = async (req, res) => {
         select: 'name price',
         populate: { path: 'business', select: 'name' }
       });
-    console.log(`[8] populatedOrder phone: ${populatedOrder?.phone}, user: ${populatedOrder?.user?.name}`);
 
-    // Send notifications
-    if (populatedOrder && populatedOrder.phone) {
-      console.log(`[9] sending client notification`);
-      await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-    } else {
-      console.warn(`[9] cannot send client notification: missing phone`);
-    }
-
-    console.log(`[10] sending rider notifications`);
-    await notifyRiders(populatedOrder || order);
-
-    if (populatedOrder && populatedOrder.type === 'business') {
-      console.log(`[11] sending business notifications`);
+    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+    await notifyRiders(populatedOrder);
+    if (populatedOrder.type === 'business') {
       await notifyBusinessesForOrder(populatedOrder);
     }
 
-    res.json({ success: true, data: { orderNumber, status: order.status, paymentStatus: order.paymentStatus, paymentMethod, confirmedAt: order.confirmedAt }, message: 'Order confirmed successfully' });
+    res.json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        paymentMethod: order.paymentMethod,
+        confirmedAt: order.confirmedAt,
+      },
+      message: 'Order confirmed successfully',
+    });
   } catch (error) {
     await session.abortTransaction();
-    console.error('❌ [confirmOrder] Error:', error);
+    console.error('Confirm order error:', error);
     res.status(500).json({ success: false, message: 'Failed to confirm order', error: error.message });
   } finally {
     session.endSession();
@@ -539,7 +397,7 @@ const confirmOrder = async (req, res) => {
 };
 
 // ================================
-// ADMIN CONFIRM ORDER (explicit admin endpoint)
+// ADMIN CONFIRM ORDER
 // ================================
 const adminConfirmOrder = async (req, res) => {
   const session = await mongoose.startSession();
@@ -578,10 +436,18 @@ const adminConfirmOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    await notifyClient(order, 'Confirmed', { itemsCount: order.items ? order.items.length : 0 });
-    await notifyRiders(order);
-    if (order.type === 'business') {
-      await notifyBusinessesForOrder(order);
+    const populatedOrder = await Order.findById(order._id)
+      .populate('user', 'name phone')
+      .populate({
+        path: 'items.product',
+        select: 'name price',
+        populate: { path: 'business', select: 'name' }
+      });
+
+    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+    await notifyRiders(populatedOrder);
+    if (populatedOrder.type === 'business') {
+      await notifyBusinessesForOrder(populatedOrder);
     }
 
     res.json({
@@ -1102,7 +968,6 @@ const createOrderForUser = async (req, res) => {
       orderData.deliveryFee = businessResult.deliveryFee;
       orderData.total = businessResult.total;
     } else {
-      // For simplicity, set default values for other types
       orderData.subtotal = 0;
       orderData.deliveryFee = 1000;
       orderData.total = 1000;
