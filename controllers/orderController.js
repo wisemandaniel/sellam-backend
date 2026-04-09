@@ -56,13 +56,20 @@ const validateTicketBooking = (data) => {
 };
 
 const validateRandomDelivery = (deliveryData) => {
-  const { pickupAddress, deliveryAddress, senderNumber, receiverNumber, itemDescription } = deliveryData;
+  const { pickupAddress, deliveryAddress, senderNumber, receiverNumber, itemDescription, price } = deliveryData;
   if (!pickupAddress) throw new Error("Pickup address is required");
   if (!deliveryAddress) throw new Error("Delivery address is required");
   if (!senderNumber) throw new Error("Sender number is required");
   if (!receiverNumber) throw new Error("Receiver number is required");
   if (!itemDescription) throw new Error("Item description is required");
-  return { pickupAddress, deliveryAddress, senderNumber, receiverNumber, itemDescription, price: deliveryData.price || 0 };
+  return {
+    pickupAddress,
+    deliveryAddress,
+    senderNumber,
+    receiverNumber,
+    itemDescription,
+    price: Number(price) || 0,
+  };
 };
 
 const validateBusinessOrder = async (items) => {
@@ -226,6 +233,7 @@ const createOrder = async (req, res) => {
           deliveryAddress: randomDeliveryAddress || deliveryAddress,
           senderNumber, receiverNumber, itemDescription, price: deliveryPrice
         });
+        console.log('🔍 RANDOM DELIVERY DATA:', deliveryData);
         orderData.deliveryData = deliveryData;
         orderData.subtotal = deliveryData.price || 0;
         orderData.deliveryFee = 1000;

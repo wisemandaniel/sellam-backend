@@ -3,7 +3,6 @@ const User = require("../models/User");
 const Store = require("../models/Store");
 const { sendOrderNotification } = require("./messageServices");
 
-// Helper: format phone number to E.164
 const formatPhoneNumber = (phone) => {
   if (!phone) return null;
   const cleaned = String(phone).replace(/\D/g, "");
@@ -14,13 +13,11 @@ const formatPhoneNumber = (phone) => {
   return null;
 };
 
-// Get all approved, active riders' phone numbers
 const getRiderPhones = async () => {
   const riders = await User.find({ role: "rider", isApproved: true, isActive: true }).select("phone");
   return riders.map(r => formatPhoneNumber(r.phone)).filter(Boolean);
 };
 
-// Send a WhatsApp notification to a single recipient
 const notifyRecipient = async (phoneNumber, orderDetails) => {
   if (!phoneNumber) return;
   try {
@@ -35,7 +32,6 @@ const notifyRecipient = async (phoneNumber, orderDetails) => {
   }
 };
 
-// Notify the client about order status
 const notifyClient = async (order, status, extra = {}) => {
   const clientPhone = formatPhoneNumber(order.phone);
   if (!clientPhone) {
@@ -68,7 +64,6 @@ const notifyClient = async (order, status, extra = {}) => {
   await notifyRecipient(clientPhone, orderDetails);
 };
 
-// Notify all riders about a new order
 const notifyRiders = async (order) => {
   const riderPhones = await getRiderPhones();
   if (riderPhones.length === 0) return;
@@ -84,6 +79,9 @@ const notifyRiders = async (order) => {
     customerName: order.user?.name || '',
     notes: order.notes,
     createdAt: order.createdAt,
+    // For random deliveries, include pickup address and item description
+    pickupAddress: order.deliveryData?.pickupAddress,
+    itemDescription: order.deliveryData?.itemDescription,
   };
   for (const phone of riderPhones) {
     await notifyRecipient(phone, orderDetails);
@@ -91,7 +89,6 @@ const notifyRiders = async (order) => {
   console.log(`Notified ${riderPhones.length} riders about order ${order.orderNumber}`);
 };
 
-// Notify businesses involved in a business order
 const notifyBusinessesForOrder = async (order) => {
   const businessIds = [...new Set(order.items.map(item => item.business?.toString()).filter(Boolean))];
   if (businessIds.length === 0) return;
@@ -121,7 +118,6 @@ const notifyBusinessesForOrder = async (order) => {
   }
 };
 
-// Notify admin about non‑business orders
 const notifyAdmin = async (order, type) => {
   const adminPhone = process.env.ADMIN_NOTIFICATION_PHONE;
   if (!adminPhone) return;
