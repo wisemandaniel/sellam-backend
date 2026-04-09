@@ -3,6 +3,13 @@ const Order = require('../models/Order');
 const Transaction = require('../models/transaction');
 const axios = require('axios');
 
+// Import notification helpers
+const {
+  notifyClient,
+  notifyRiders,
+  notifyBusinessesForOrder,
+} = require('../services/notificationServices');
+
 // ==================== CONFIGURATION & VALIDATION ====================
 
 const verifyFapshiConfig = () => {
@@ -133,7 +140,7 @@ exports.createPayment = async (req, res) => {
   }
 
   try {
-    const { amount, from, orderNumber } = req.body; // ✅ orderNumber (string)
+    const { amount, from, orderNumber } = req.body;
 
     // Validate input
     if (!amount || !from || !orderNumber) {
@@ -149,7 +156,7 @@ exports.createPayment = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid phone number' });
     }
 
-    // ✅ Find order by orderNumber and verify ownership
+    // Find order by orderNumber and verify ownership
     const order = await Order.findOne({ orderNumber, user: userId });
     if (!order) {
       return res.status(404).json({
@@ -198,10 +205,10 @@ exports.createPayment = async (req, res) => {
       return res.status(500).json({ success: false, error: 'No transaction ID received' });
     }
 
-    // ✅ Create Payment record with order ObjectId (from the found order)
+    // Create Payment record with order ObjectId
     const payment = new Payment({
       user: userId,
-      order: order._id, // store MongoDB _id for relational integrity
+      order: order._id,
       amount,
       from: normalizedFrom,
       currency: 'XAF',
@@ -226,7 +233,6 @@ exports.createPayment = async (req, res) => {
         await transaction.save();
       } catch (transError) {
         console.error('⚠️ Failed to create transaction record:', transError.message);
-        // Continue – payment is already saved
       }
     }
 
@@ -238,7 +244,7 @@ exports.createPayment = async (req, res) => {
           savedPayment.status = statusData.status;
           await savedPayment.save();
 
-          // ✅ If payment succeeded, update order status
+          // If payment succeeded, update order status and send notifications
           if (statusData.status === 'SUCCESSFUL') {
             const linkedOrder = await Order.findById(savedPayment.order);
             if (linkedOrder) {
@@ -248,6 +254,20 @@ exports.createPayment = async (req, res) => {
               linkedOrder.confirmedAt = new Date();
               await linkedOrder.save();
               console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
+
+              // Re‑populate order for notifications
+              const populatedOrder = await Order.findById(linkedOrder._id)
+                .populate('user', 'name phone')
+                .populate({
+                  path: 'items.product',
+                  select: 'name price',
+                  populate: { path: 'business', select: 'name' }
+                });
+              await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+              await notifyRiders(populatedOrder);
+              if (populatedOrder.type === 'business') {
+                await notifyBusinessesForOrder(populatedOrder);
+              }
             }
           }
 
@@ -278,7 +298,7 @@ exports.createPayment = async (req, res) => {
 
 /**
  * Fapshi Webhook Endpoint – receives final status and updates local records.
- * ✅ Also updates the linked order if payment is successful.
+ * ✅ Also updates the linked order if payment is successful and sends notifications.
  */
 exports.fapshiWebhook = async (req, res) => {
   try {
@@ -320,7 +340,7 @@ exports.fapshiWebhook = async (req, res) => {
     await payment.save();
     console.log(`✅ Payment ${payment._id} status updated from ${oldStatus} to ${newStatus}`);
 
-    // ✅ If payment is SUCCESSFUL, update the linked order
+    // If payment is SUCCESSFUL, update the linked order and send notifications
     if (newStatus === 'SUCCESSFUL' && payment.order) {
       const order = await Order.findById(payment.order);
       if (order) {
@@ -330,6 +350,20 @@ exports.fapshiWebhook = async (req, res) => {
         order.confirmedAt = new Date();
         await order.save();
         console.log(`✅ Order ${order.orderNumber} marked as paid and confirmed via webhook`);
+
+        // Re‑populate order for notifications
+        const populatedOrder = await Order.findById(order._id)
+          .populate('user', 'name phone')
+          .populate({
+            path: 'items.product',
+            select: 'name price',
+            populate: { path: 'business', select: 'name' }
+          });
+        await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+        await notifyRiders(populatedOrder);
+        if (populatedOrder.type === 'business') {
+          await notifyBusinessesForOrder(populatedOrder);
+        }
       }
     }
 
@@ -362,7 +396,7 @@ exports.fapshiWebhook = async (req, res) => {
 
 /**
  * Get transaction status – fetches latest status from Fapshi and updates local records if changed.
- * ✅ Also updates order if payment succeeded during polling.
+ * ✅ Also updates order if payment succeeded and sends notifications.
  */
 exports.getTransactionStatus = async (req, res) => {
   const userId = getUserId(req);
@@ -406,7 +440,7 @@ exports.getTransactionStatus = async (req, res) => {
       payment.status = newStatus;
       await payment.save();
 
-      // ✅ If payment succeeded, update the order
+      // If payment succeeded, update the order and send notifications
       if (newStatus === 'SUCCESSFUL' && payment.order) {
         const order = await Order.findById(payment.order);
         if (order) {
@@ -416,6 +450,20 @@ exports.getTransactionStatus = async (req, res) => {
           order.confirmedAt = new Date();
           await order.save();
           console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
+
+          // Re‑populate order for notifications
+          const populatedOrder = await Order.findById(order._id)
+            .populate('user', 'name phone')
+            .populate({
+              path: 'items.product',
+              select: 'name price',
+              populate: { path: 'business', select: 'name' }
+            });
+          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+          await notifyRiders(populatedOrder);
+          if (populatedOrder.type === 'business') {
+            await notifyBusinessesForOrder(populatedOrder);
+          }
         }
       }
 
