@@ -459,12 +459,14 @@ const confirmOrder = async (req, res) => {
     const { orderNumber } = req.params;
     const userId = req.user._id;
     const paymentMethod = req.query.pm || 'momo';
+    console.log(`[1] orderNumber=${orderNumber}, userId=${userId}, paymentMethod=${paymentMethod}`);
 
     const allowedMethods = ['cash', 'momo'];
     if (!allowedMethods.includes(paymentMethod)) {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'Invalid payment method' });
     }
+    console.log(`[2] payment method allowed`);
 
     let order;
     if (req.user.role === 'admin') {
@@ -472,6 +474,7 @@ const confirmOrder = async (req, res) => {
     } else {
       order = await Order.findOne({ orderNumber, user: userId }).session(session);
     }
+    console.log(`[3] order found? ${!!order}, status=${order?.status}`);
 
     if (!order) {
       await session.abortTransaction();
@@ -485,6 +488,7 @@ const confirmOrder = async (req, res) => {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: `Cannot confirm order with status "${order.status}"` });
     }
+    console.log(`[4] order status is pending, proceeding to update`);
 
     order.status = 'confirmed';
     order.paymentMethod = paymentMethod;
@@ -492,12 +496,13 @@ const confirmOrder = async (req, res) => {
     else order.paymentStatus = 'unpaid';
     order.confirmedAt = new Date();
     await order.save({ session });
+    console.log(`[5] order saved, confirmedAt=${order.confirmedAt}`);
 
     await session.commitTransaction();
-    console.log(`✅ [confirmOrder] Order ${orderNumber} status updated to confirmed, paymentMethod=${paymentMethod}`);
+    console.log(`[6] transaction committed`);
 
-    // ========== RE-POPULATE ORDER FOR NOTIFICATIONS ==========
-    console.log(`🔍 [confirmOrder] Fetching order with populated user and items...`);
+    // Re-populate order
+    console.log(`[7] re-populating order...`);
     const populatedOrder = await Order.findById(order._id)
       .populate('user', 'name phone')
       .populate({
@@ -505,42 +510,25 @@ const confirmOrder = async (req, res) => {
         select: 'name price',
         populate: { path: 'business', select: 'name' }
       });
+    console.log(`[8] populatedOrder phone: ${populatedOrder?.phone}, user: ${populatedOrder?.user?.name}`);
 
-    if (!populatedOrder) {
-      console.error(`❌ [confirmOrder] Could not find order after confirmation: ${orderNumber}`);
-    } else {
-      console.log(`📦 [confirmOrder] Populated order: id=${populatedOrder._id}, phone=${populatedOrder.phone}, user=${populatedOrder.user?.name}, itemsCount=${populatedOrder.items?.length}`);
-    }
-
-    // ========== SEND CLIENT NOTIFICATION ==========
+    // Send notifications
     if (populatedOrder && populatedOrder.phone) {
-      console.log(`📱 [confirmOrder] Calling notifyClient for ${populatedOrder.orderNumber}...`);
+      console.log(`[9] sending client notification`);
       await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
     } else {
-      console.warn(`⚠️ [confirmOrder] No client phone number for order ${orderNumber}`);
+      console.warn(`[9] cannot send client notification: missing phone`);
     }
 
-    // ========== SEND RIDER NOTIFICATIONS ==========
-    console.log(`📢 [confirmOrder] Calling notifyRiders for ${orderNumber}...`);
+    console.log(`[10] sending rider notifications`);
     await notifyRiders(populatedOrder || order);
 
-    // ========== SEND BUSINESS NOTIFICATIONS (if business order) ==========
     if (populatedOrder && populatedOrder.type === 'business') {
-      console.log(`🏪 [confirmOrder] Calling notifyBusinessesForOrder for ${orderNumber}...`);
+      console.log(`[11] sending business notifications`);
       await notifyBusinessesForOrder(populatedOrder);
     }
 
-    res.json({
-      success: true,
-      data: {
-        orderNumber: order.orderNumber,
-        status: order.status,
-        paymentStatus: order.paymentStatus,
-        paymentMethod: order.paymentMethod,
-        confirmedAt: order.confirmedAt,
-      },
-      message: 'Order confirmed successfully',
-    });
+    res.json({ success: true, data: { orderNumber, status: order.status, paymentStatus: order.paymentStatus, paymentMethod, confirmedAt: order.confirmedAt }, message: 'Order confirmed successfully' });
   } catch (error) {
     await session.abortTransaction();
     console.error('❌ [confirmOrder] Error:', error);
