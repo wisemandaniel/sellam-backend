@@ -451,6 +451,7 @@ const createOrder = async (req, res) => {
 // ================================
 const confirmOrder = async (req, res) => {
   console.log(`🔔 [confirmOrder] CALLED with orderNumber: ${req.params.orderNumber}, pm: ${req.query.pm}, user role: ${req.user?.role}, userId: ${req.user?._id}`);
+
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -493,8 +494,10 @@ const confirmOrder = async (req, res) => {
     await order.save({ session });
 
     await session.commitTransaction();
+    console.log(`✅ [confirmOrder] Order ${orderNumber} status updated to confirmed, paymentMethod=${paymentMethod}`);
 
-    // ✅ IMPORTANT: Re-populate order with user and items before sending notifications
+    // ========== RE-POPULATE ORDER FOR NOTIFICATIONS ==========
+    console.log(`🔍 [confirmOrder] Fetching order with populated user and items...`);
     const populatedOrder = await Order.findById(order._id)
       .populate('user', 'name phone')
       .populate({
@@ -503,15 +506,27 @@ const confirmOrder = async (req, res) => {
         populate: { path: 'business', select: 'name' }
       });
 
-    // Send notifications (with logging)
-    console.log(`[NOTIFY] Sending client notification for order ${populatedOrder.orderNumber}`);
-    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items ? populatedOrder.items.length : 0 });
+    if (!populatedOrder) {
+      console.error(`❌ [confirmOrder] Could not find order after confirmation: ${orderNumber}`);
+    } else {
+      console.log(`📦 [confirmOrder] Populated order: id=${populatedOrder._id}, phone=${populatedOrder.phone}, user=${populatedOrder.user?.name}, itemsCount=${populatedOrder.items?.length}`);
+    }
 
-    console.log(`[NOTIFY] Sending rider notifications for order ${populatedOrder.orderNumber}`);
-    await notifyRiders(populatedOrder);
+    // ========== SEND CLIENT NOTIFICATION ==========
+    if (populatedOrder && populatedOrder.phone) {
+      console.log(`📱 [confirmOrder] Calling notifyClient for ${populatedOrder.orderNumber}...`);
+      await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+    } else {
+      console.warn(`⚠️ [confirmOrder] No client phone number for order ${orderNumber}`);
+    }
 
-    if (populatedOrder.type === 'business') {
-      console.log(`[NOTIFY] Sending business notifications for order ${populatedOrder.orderNumber}`);
+    // ========== SEND RIDER NOTIFICATIONS ==========
+    console.log(`📢 [confirmOrder] Calling notifyRiders for ${orderNumber}...`);
+    await notifyRiders(populatedOrder || order);
+
+    // ========== SEND BUSINESS NOTIFICATIONS (if business order) ==========
+    if (populatedOrder && populatedOrder.type === 'business') {
+      console.log(`🏪 [confirmOrder] Calling notifyBusinessesForOrder for ${orderNumber}...`);
       await notifyBusinessesForOrder(populatedOrder);
     }
 
@@ -528,7 +543,7 @@ const confirmOrder = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
-    console.error('Confirm order error:', error);
+    console.error('❌ [confirmOrder] Error:', error);
     res.status(500).json({ success: false, message: 'Failed to confirm order', error: error.message });
   } finally {
     session.endSession();
