@@ -450,6 +450,7 @@ const createOrder = async (req, res) => {
 // CONFIRM ORDER (customer) – also accessible by admin
 // ================================
 const confirmOrder = async (req, res) => {
+  console.log(`🔔 [confirmOrder] CALLED with orderNumber: ${req.params.orderNumber}, pm: ${req.query.pm}, user role: ${req.user?.role}, userId: ${req.user?._id}`);
   const session = await mongoose.startSession();
   session.startTransaction();
 
