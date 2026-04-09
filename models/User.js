@@ -97,6 +97,11 @@ const userSchema = new mongoose.Schema(
       phone: String,
       requestedAt: Date,
     },
+    pendingPhoneVerification: {
+      phone: String,
+      requestedAt: Date,
+      operation: { type: String, enum: ['create', 'update'] }
+    }
   },
   { timestamps: true }
 );

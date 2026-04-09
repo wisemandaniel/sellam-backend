@@ -20,7 +20,8 @@ const {
   getBusinessOrderStats,
   confirmOrder,
   getOrderByNumber,
-  getConfirmedOrders
+  getConfirmedOrders,
+  adminConfirmOrder
 } = require('../controllers/orderController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -59,6 +60,7 @@ router.get('/', authorize('admin'), getAllOrders); // Get all orders (admin pane
 router.get('/rider/:riderId', authorize('admin'), getRiderOrders); 
 router.put('/:id', authorize('admin'), updateOrder); // Update order (admin panel)
 router.delete('/:id', authorize('admin'), deleteOrder); // Delete order (admin panel)
+router.patch('/admin/confirm/:orderNumber', authorize('admin'), adminConfirmOrder);
 
 // ====================
 // BUSINESS OWNER ROUTES
