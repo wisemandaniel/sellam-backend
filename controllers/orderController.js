@@ -457,9 +457,6 @@ const confirmOrder = async (req, res) => {
     const { orderNumber } = req.params;
     const userId = req.user._id;
     const paymentMethod = req.query.pm || 'momo';
-    const userRole = req.user.role;
-
-    console.log(`[CONFIRM] Order number: ${orderNumber}, userId: ${userId}, role: ${userRole}, paymentMethod: ${paymentMethod}`);
 
     const allowedMethods = ['cash', 'momo'];
     if (!allowedMethods.includes(paymentMethod)) {
@@ -470,19 +467,14 @@ const confirmOrder = async (req, res) => {
     let order;
     if (req.user.role === 'admin') {
       order = await Order.findOne({ orderNumber }).session(session);
-      console.log(`[CONFIRM] Admin confirming order: ${orderNumber}`);
     } else {
       order = await Order.findOne({ orderNumber, user: userId }).session(session);
-      console.log(`[CONFIRM] Client confirming order: ${orderNumber}`);
     }
 
     if (!order) {
       await session.abortTransaction();
-      console.log(`[CONFIRM] Order not found`);
       return res.status(404).json({ success: false, message: 'Order not found or not authorized' });
     }
-    console.log(`[CONFIRM] Order found: status=${order.status}, type=${order.type}, user=${order.user}`);
-
     if (order.status === 'confirmed') {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'Order already confirmed' });
@@ -498,12 +490,10 @@ const confirmOrder = async (req, res) => {
     else order.paymentStatus = 'unpaid';
     order.confirmedAt = new Date();
     await order.save({ session });
-    console.log(`[CONFIRM] Order saved, new status: ${order.status}`);
 
     await session.commitTransaction();
-    console.log(`[CONFIRM] Transaction committed`);
 
-    // Re-populate order for notifications
+    // ✅ IMPORTANT: Re-populate order with user and items before sending notifications
     const populatedOrder = await Order.findById(order._id)
       .populate('user', 'name phone')
       .populate({
@@ -511,16 +501,18 @@ const confirmOrder = async (req, res) => {
         select: 'name price',
         populate: { path: 'business', select: 'name' }
       });
-    console.log(`[CONFIRM] Populated order: user=${populatedOrder.user?.name}, phone=${populatedOrder.phone}, items count=${populatedOrder.items?.length}`);
 
-    // Send notifications
-    console.log(`[CONFIRM] Sending notifications...`);
-    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+    // Send notifications (with logging)
+    console.log(`[NOTIFY] Sending client notification for order ${populatedOrder.orderNumber}`);
+    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items ? populatedOrder.items.length : 0 });
+
+    console.log(`[NOTIFY] Sending rider notifications for order ${populatedOrder.orderNumber}`);
     await notifyRiders(populatedOrder);
+
     if (populatedOrder.type === 'business') {
+      console.log(`[NOTIFY] Sending business notifications for order ${populatedOrder.orderNumber}`);
       await notifyBusinessesForOrder(populatedOrder);
     }
-    console.log(`[CONFIRM] Notifications sent`);
 
     res.json({
       success: true,
@@ -535,7 +527,7 @@ const confirmOrder = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
-    console.error('❌ Confirm order error:', error);
+    console.error('Confirm order error:', error);
     res.status(500).json({ success: false, message: 'Failed to confirm order', error: error.message });
   } finally {
     session.endSession();
