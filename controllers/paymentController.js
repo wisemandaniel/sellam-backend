@@ -3,12 +3,6 @@ const Order = require('../models/Order');
 const Transaction = require('../models/transaction');
 const axios = require('axios');
 
-const {
-  notifyClient,
-  notifyRiders,
-  notifyBusinessesForOrder,
-} = require('../services/notificationServices');
-
 // ==================== CONFIGURATION & VALIDATION ====================
 
 const verifyFapshiConfig = () => {
@@ -128,9 +122,6 @@ const getFapshiTransactionStatus = async trans_id => {
 
 // ==================== PAYMENT CONTROLLERS ====================
 
-/**
- * Create a new payment – initiates transaction with Fapshi and stores PENDING status.
- */
 exports.createPayment = async (req, res) => {
   const userId = getUserId(req);
   if (!userId) {
@@ -229,7 +220,7 @@ exports.createPayment = async (req, res) => {
       }
     }
 
-    // Asynchronously check initial status
+    // Asynchronously check initial status (NO NOTIFICATIONS)
     setImmediate(async () => {
       try {
         const statusData = await getFapshiTransactionStatus(transactionId);
@@ -239,34 +230,13 @@ exports.createPayment = async (req, res) => {
 
           if (statusData.status === 'SUCCESSFUL') {
             const linkedOrder = await Order.findById(savedPayment.order);
-            if (linkedOrder) {
-              console.log(`🔔 [createPayment] Order ${linkedOrder.orderNumber} - notificationsSent = ${linkedOrder.notificationsSent}`);
-              if (!linkedOrder.notificationsSent) {
-                linkedOrder.paymentStatus = 'paid';
-                linkedOrder.paymentMethod = 'momo';
-                linkedOrder.status = 'confirmed';
-                linkedOrder.confirmedAt = new Date();
-                await linkedOrder.save();
-                console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
-
-                const populatedOrder = await Order.findById(linkedOrder._id)
-                  .populate('user', 'name phone')
-                  .populate({
-                    path: 'items.product',
-                    select: 'name price',
-                    populate: { path: 'business', select: 'name' }
-                  });
-                await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-                await notifyRiders(populatedOrder);
-                if (populatedOrder.type === 'business') {
-                  await notifyBusinessesForOrder(populatedOrder);
-                }
-                linkedOrder.notificationsSent = true;
-                await linkedOrder.save();
-                console.log(`✅ notificationsSent set to true for order ${linkedOrder.orderNumber}`);
-              } else {
-                console.log(`⏭️ [createPayment] Notifications already sent for order ${linkedOrder.orderNumber}, skipping.`);
-              }
+            if (linkedOrder && linkedOrder.status !== 'confirmed') {
+              linkedOrder.paymentStatus = 'paid';
+              linkedOrder.paymentMethod = 'momo';
+              linkedOrder.status = 'confirmed';
+              linkedOrder.confirmedAt = new Date();
+              await linkedOrder.save();
+              console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
             }
           }
 
@@ -295,9 +265,6 @@ exports.createPayment = async (req, res) => {
   }
 };
 
-/**
- * Fapshi Webhook Endpoint – receives final status and updates local records.
- */
 exports.fapshiWebhook = async (req, res) => {
   try {
     console.log('🔔 Fapshi Webhook Received:', { body: req.body, timestamp: new Date().toISOString() });
@@ -337,34 +304,13 @@ exports.fapshiWebhook = async (req, res) => {
 
     if (newStatus === 'SUCCESSFUL' && payment.order) {
       const order = await Order.findById(payment.order);
-      if (order) {
-        console.log(`🔔 [webhook] Order ${order.orderNumber} - notificationsSent = ${order.notificationsSent}`);
-        if (!order.notificationsSent) {
-          order.paymentStatus = 'paid';
-          order.paymentMethod = 'momo';
-          order.status = 'confirmed';
-          order.confirmedAt = new Date();
-          await order.save();
-          console.log(`✅ Order ${order.orderNumber} confirmed via webhook`);
-
-          const populatedOrder = await Order.findById(order._id)
-            .populate('user', 'name phone')
-            .populate({
-              path: 'items.product',
-              select: 'name price',
-              populate: { path: 'business', select: 'name' }
-            });
-          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-          await notifyRiders(populatedOrder);
-          if (populatedOrder.type === 'business') {
-            await notifyBusinessesForOrder(populatedOrder);
-          }
-          order.notificationsSent = true;
-          await order.save();
-          console.log(`✅ notificationsSent set to true for order ${order.orderNumber}`);
-        } else {
-          console.log(`⏭️ [webhook] Notifications already sent for order ${order.orderNumber}, skipping.`);
-        }
+      if (order && order.status !== 'confirmed') {
+        order.paymentStatus = 'paid';
+        order.paymentMethod = 'momo';
+        order.status = 'confirmed';
+        order.confirmedAt = new Date();
+        await order.save();
+        console.log(`✅ Order ${order.orderNumber} confirmed via webhook`);
       }
     }
 
@@ -393,9 +339,6 @@ exports.fapshiWebhook = async (req, res) => {
   }
 };
 
-/**
- * Get transaction status – fetches latest status from Fapshi and updates local records if changed.
- */
 exports.getTransactionStatus = async (req, res) => {
   const userId = getUserId(req);
   if (!userId) {
@@ -436,34 +379,13 @@ exports.getTransactionStatus = async (req, res) => {
 
       if (newStatus === 'SUCCESSFUL' && payment.order) {
         const order = await Order.findById(payment.order);
-        if (order) {
-          console.log(`🔔 [polling] Order ${order.orderNumber} - notificationsSent = ${order.notificationsSent}`);
-          if (!order.notificationsSent) {
-            order.paymentStatus = 'paid';
-            order.paymentMethod = 'momo';
-            order.status = 'confirmed';
-            order.confirmedAt = new Date();
-            await order.save();
-            console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
-
-            const populatedOrder = await Order.findById(order._id)
-              .populate('user', 'name phone')
-              .populate({
-                path: 'items.product',
-                select: 'name price',
-                populate: { path: 'business', select: 'name' }
-              });
-            await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-            await notifyRiders(populatedOrder);
-            if (populatedOrder.type === 'business') {
-              await notifyBusinessesForOrder(populatedOrder);
-            }
-            order.notificationsSent = true;
-            await order.save();
-            console.log(`✅ notificationsSent set to true for order ${order.orderNumber}`);
-          } else {
-            console.log(`⏭️ [polling] Notifications already sent for order ${order.orderNumber}, skipping.`);
-          }
+        if (order && order.status !== 'confirmed') {
+          order.paymentStatus = 'paid';
+          order.paymentMethod = 'momo';
+          order.status = 'confirmed';
+          order.confirmedAt = new Date();
+          await order.save();
+          console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
         }
       }
 
@@ -493,9 +415,6 @@ exports.getTransactionStatus = async (req, res) => {
   }
 };
 
-/**
- * Test Fapshi configuration (admin only)
- */
 exports.testFapshiConfig = async (req, res) => {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ success: false, message: 'Admin access required' });

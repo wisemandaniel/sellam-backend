@@ -350,26 +350,36 @@ const confirmOrder = async (req, res) => {
       await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Order not found or not authorized' });
     }
-    if (order.status === 'confirmed') {
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: 'Order already confirmed' });
-    }
-    if (order.status !== 'pending') {
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: `Cannot confirm order with status "${order.status}"` });
+
+    // If already confirmed and notifications sent, just return success
+    if (order.status === 'confirmed' && order.notificationsSent) {
+      await session.commitTransaction();
+      return res.json({
+        success: true,
+        message: 'Order already confirmed',
+        data: {
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          paymentMethod: order.paymentMethod,
+          confirmedAt: order.confirmedAt,
+        },
+      });
     }
 
-    order.status = 'confirmed';
-    order.paymentMethod = paymentMethod;
-    if (paymentMethod === 'momo') order.paymentStatus = 'paid';
-    else order.paymentStatus = 'unpaid';
-    order.confirmedAt = new Date();
-    await order.save({ session });
+    // Update order status if still pending
+    if (order.status !== 'confirmed') {
+      order.status = 'confirmed';
+      order.paymentMethod = paymentMethod;
+      if (paymentMethod === 'momo') order.paymentStatus = 'paid';
+      else order.paymentStatus = 'unpaid';
+      order.confirmedAt = new Date();
+      await order.save({ session });
+    }
 
     await session.commitTransaction();
 
-    console.log(`🔔 [confirmOrder] Order ${order.orderNumber} - notificationsSent = ${order.notificationsSent}`);
-    // Send notifications only once
+    // Atomically send notifications only if not already sent
     if (!order.notificationsSent) {
       const populatedOrder = await Order.findById(order._id)
         .populate('user', 'name phone')
@@ -385,10 +395,8 @@ const confirmOrder = async (req, res) => {
         await notifyBusinessesForOrder(populatedOrder);
       }
 
-      order.notificationsSent = true;
-      await order.save();
-    } else {
-      console.log(`⚠️ Notifications already sent for order ${order.orderNumber}, skipping duplicate.`);
+      // Atomic update to prevent race conditions
+      await Order.updateOne({ _id: order._id, notificationsSent: false }, { $set: { notificationsSent: true } });
     }
 
     res.json({
@@ -411,9 +419,7 @@ const confirmOrder = async (req, res) => {
   }
 };
 
-// ================================
-// ADMIN CONFIRM ORDER
-// ================================
+// Same for adminConfirmOrder (just remove the userId check)
 const adminConfirmOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -433,21 +439,30 @@ const adminConfirmOrder = async (req, res) => {
       await session.abortTransaction();
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
-    if (order.status === 'confirmed') {
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: 'Order already confirmed' });
-    }
-    if (order.status !== 'pending') {
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: `Cannot confirm order with status "${order.status}"` });
+
+    if (order.status === 'confirmed' && order.notificationsSent) {
+      await session.commitTransaction();
+      return res.json({
+        success: true,
+        message: 'Order already confirmed',
+        data: {
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          paymentMethod: order.paymentMethod,
+          confirmedAt: order.confirmedAt,
+        },
+      });
     }
 
-    order.status = 'confirmed';
-    order.paymentMethod = paymentMethod;
-    if (paymentMethod === 'momo') order.paymentStatus = 'paid';
-    else order.paymentStatus = 'unpaid';
-    order.confirmedAt = new Date();
-    await order.save({ session });
+    if (order.status !== 'confirmed') {
+      order.status = 'confirmed';
+      order.paymentMethod = paymentMethod;
+      if (paymentMethod === 'momo') order.paymentStatus = 'paid';
+      else order.paymentStatus = 'unpaid';
+      order.confirmedAt = new Date();
+      await order.save({ session });
+    }
 
     await session.commitTransaction();
 
@@ -466,10 +481,7 @@ const adminConfirmOrder = async (req, res) => {
         await notifyBusinessesForOrder(populatedOrder);
       }
 
-      order.notificationsSent = true;
-      await order.save();
-    } else {
-      console.log(`⚠️ Notifications already sent for order ${order.orderNumber}, skipping duplicate.`);
+      await Order.updateOne({ _id: order._id, notificationsSent: false }, { $set: { notificationsSent: true } });
     }
 
     res.json({
