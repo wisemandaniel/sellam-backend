@@ -3,6 +3,13 @@ const Order = require('../models/Order');
 const Transaction = require('../models/transaction');
 const axios = require('axios');
 
+// Import notification helpers
+const {
+  notifyClient,
+  notifyRiders,
+  notifyBusinessesForOrder,
+} = require('../services/notificationServices');   // adjust path if needed
+
 // ==================== CONFIGURATION & VALIDATION ====================
 
 const verifyFapshiConfig = () => {
@@ -223,7 +230,7 @@ exports.createPayment = async (req, res) => {
       }
     }
 
-    // Asynchronously check initial status (no notifications)
+    // Asynchronously check initial status
     setImmediate(async () => {
       try {
         const statusData = await getFapshiTransactionStatus(transactionId);
@@ -240,7 +247,22 @@ exports.createPayment = async (req, res) => {
               linkedOrder.confirmedAt = new Date();
               await linkedOrder.save();
               console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
-              // Notifications will be sent by the confirm endpoint
+
+              // Send notifications (only once)
+              const populatedOrder = await Order.findById(linkedOrder._id)
+                .populate('user', 'name phone')
+                .populate({
+                  path: 'items.product',
+                  select: 'name price',
+                  populate: { path: 'business', select: 'name' }
+                });
+              await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+              await notifyRiders(populatedOrder);
+              if (populatedOrder.type === 'business') {
+                await notifyBusinessesForOrder(populatedOrder);
+              }
+              linkedOrder.notificationsSent = true;
+              await linkedOrder.save();
             }
           }
 
@@ -318,7 +340,21 @@ exports.fapshiWebhook = async (req, res) => {
         order.confirmedAt = new Date();
         await order.save();
         console.log(`✅ Order ${order.orderNumber} confirmed via webhook`);
-        // Notifications will be sent by the confirm endpoint
+
+        const populatedOrder = await Order.findById(order._id)
+          .populate('user', 'name phone')
+          .populate({
+            path: 'items.product',
+            select: 'name price',
+            populate: { path: 'business', select: 'name' }
+          });
+        await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+        await notifyRiders(populatedOrder);
+        if (populatedOrder.type === 'business') {
+          await notifyBusinessesForOrder(populatedOrder);
+        }
+        order.notificationsSent = true;
+        await order.save();
       }
     }
 
@@ -397,7 +433,21 @@ exports.getTransactionStatus = async (req, res) => {
           order.confirmedAt = new Date();
           await order.save();
           console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
-          // Notifications will be sent by the confirm endpoint
+
+          const populatedOrder = await Order.findById(order._id)
+            .populate('user', 'name phone')
+            .populate({
+              path: 'items.product',
+              select: 'name price',
+              populate: { path: 'business', select: 'name' }
+            });
+          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+          await notifyRiders(populatedOrder);
+          if (populatedOrder.type === 'business') {
+            await notifyBusinessesForOrder(populatedOrder);
+          }
+          order.notificationsSent = true;
+          await order.save();
         }
       }
 
