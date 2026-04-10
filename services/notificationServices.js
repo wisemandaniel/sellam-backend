@@ -108,8 +108,19 @@ const sendRiderNotification = async (phoneNumber, order) => {
     console.log(`✅ Rider notification sent to ${phoneNumber} for order ${order.orderNumber}`);
     return response.data;
   } catch (err) {
-    console.error(`❌ Failed to send rider notification to ${phoneNumber}:`, err.message);
-    throw err;
+    console.error(`❌ Failed to send rider notification via plain message to ${phoneNumber}:`, err.message);
+    // Fallback to template-based notification
+    console.log(`⚠️ Falling back to template-based notification for rider ${phoneNumber}`);
+    const orderDetails = {
+      orderNumber: order.orderNumber,
+      status: "New Order Available",
+      type: order.type,
+      total: order.total,
+      deliveryAddress: order.deliveryAddress,
+      customerName: order.user?.name || '',
+      createdAt: order.createdAt,
+    };
+    await notifyRecipient(phoneNumber, orderDetails);
   }
 };
 
@@ -122,7 +133,6 @@ const notifyRiders = async (order) => {
   console.log(`Notified ${riderPhones.length} riders about order ${order.orderNumber}`);
 };
 
-// Notify businesses (full details)
 const notifyBusinessesForOrder = async (order) => {
   const businessIds = [...new Set(order.items.map(item => item.business?.toString()).filter(Boolean))];
   if (businessIds.length === 0) return;
@@ -152,7 +162,6 @@ const notifyBusinessesForOrder = async (order) => {
   }
 };
 
-// Notify admin (full details for non‑business orders)
 const notifyAdmin = async (order, type) => {
   const adminPhone = process.env.ADMIN_NOTIFICATION_PHONE;
   if (!adminPhone) return;
