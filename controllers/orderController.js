@@ -368,6 +368,7 @@ const confirmOrder = async (req, res) => {
 
     await session.commitTransaction();
 
+    console.log(`🔔 [confirmOrder] Order ${order.orderNumber} - notificationsSent = ${order.notificationsSent}`);
     // Send notifications only once
     if (!order.notificationsSent) {
       const populatedOrder = await Order.findById(order._id)
