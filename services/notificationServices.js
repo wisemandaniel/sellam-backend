@@ -32,7 +32,7 @@ const notifyRecipient = async (phoneNumber, orderDetails) => {
   }
 };
 
-// Client notification – full details
+// Client notification – full details (unchanged)
 const notifyClient = async (order, status, extra = {}) => {
   const clientPhone = formatPhoneNumber(order.phone);
   if (!clientPhone) {
@@ -65,34 +65,104 @@ const notifyClient = async (order, status, extra = {}) => {
   await notifyRecipient(clientPhone, orderDetails);
 };
 
-// Rider notification – simplified, using plain WhatsApp message
+// Rider notification – customised per type
 const sendRiderNotification = async (phoneNumber, order) => {
   if (!phoneNumber) return;
   const formatMoney = (amount) => `${Math.round(amount).toLocaleString()} CFA`;
-  let message = `🚚 *NEW ORDER AVAILABLE*\n\n`;
-  message += `Order #: ${order.orderNumber}\n`;
-  
-  if (order.type === 'random') {
-    message += `Item: ${order.deliveryData?.itemDescription || 'Parcel'}\n`;
-    message += `Pickup: ${order.deliveryData?.pickupAddress || 'Not provided'}\n`;
-    message += `Delivery: ${order.deliveryAddress}\n`;
-  } else if (order.type === 'business') {
-    message += `Items: ${order.items?.length || 0}\n`;
-    message += `Delivery: ${order.deliveryAddress}\n`;
-  } else if (order.type === 'errand') {
-    message += `Errand items: ${order.errandItems?.length || 0}\n`;
-    message += `Delivery: ${order.deliveryAddress}\n`;
-  } else if (order.type === 'ticket') {
-    message += `Ticket to: ${order.ticketData?.destination || 'N/A'}\n`;
-    message += `Departure: ${order.ticketData?.departureTime || 'N/A'}\n`;
-  } else if (order.type === 'bulk') {
-    message += `Bulk order: ${order.bulkData?.parcels?.length || 0} parcels\n`;
-    message += `Delivery: ${order.deliveryAddress}\n`;
+  let message = `*NEW ORDER AVAILABLE*\n\n`;
+
+  const orderType = order.type;
+  const deliveryFee = formatMoney(order.deliveryFee);
+  const deliveryAddress = order.deliveryAddress;
+  const linkPlaceholder = '[Link to app]'; // Replace with actual deep link later
+
+  if (orderType === 'random') {
+    const pickup = order.deliveryData?.pickupAddress || 'Not provided';
+    const delivery = deliveryAddress;
+    message += `Pickup from: ${pickup}\n`;
+    message += `Deliver to: ${delivery}\n`;
+    message += `Delivery Fee: ${deliveryFee}\n\n`;
+    message += `${linkPlaceholder}`;
   }
-  
-  message += `\nTotal: ${formatMoney(order.total)}\n`;
-  message += `\nThank you for choosing AnyWare Logistics.`;
-  
+  else if (orderType === 'business') {
+    // Get store name from the first item's business
+    let storeName = 'Store';
+    if (order.items && order.items.length > 0) {
+      const firstItem = order.items[0];
+      if (firstItem.product && firstItem.product.business) {
+        storeName = firstItem.product.business.name;
+      } else if (firstItem.business) {
+        const business = await Store.findById(firstItem.business).select('name');
+        if (business) storeName = business.name;
+      }
+    }
+    message += `Buy from: ${storeName}\n`;
+    message += `Deliver to: ${deliveryAddress}\n`;
+    message += `Delivery Fee: ${deliveryFee}\n\n`;
+    message += `${linkPlaceholder}`;
+  }
+  else if (orderType === 'errand') {
+    // Determine errand subtype based on errandItems description or notes
+    const errandItems = order.errandItems || [];
+    const notes = order.notes || '';
+    const lowerNotes = notes.toLowerCase();
+
+    // Check for bill payment (electricity or fee)
+    if (lowerNotes.includes('electricity') || lowerNotes.includes('eneo')) {
+      message += `Pay Bill at: ENEO Head Office\n`;
+    }
+    else if (lowerNotes.includes('fee') || lowerNotes.includes('bank') || lowerNotes.includes('tuition')) {
+      // Extract bank name from notes if possible, else default
+      const bankMatch = notes.match(/bank\s+([A-Za-z\s]+)/i);
+      const bankName = bankMatch ? bankMatch[1].trim() : 'the bank';
+      message += `Pay Bill at: ${bankName}\n`;
+    }
+    else if (lowerNotes.includes('transcript') || lowerNotes.includes('document')) {
+      message += `Apply and collect transcript at: University of Buea\n`;
+    }
+    else {
+      // Default shopping / item list
+      message += `Buy the following items:\n`;
+      if (errandItems.length > 0) {
+        errandItems.forEach(item => {
+          message += `- ${item.name} x${item.quantity}\n`;
+        });
+      } else {
+        message += `- ${notes || 'items'}\n`;
+      }
+      message += `Deliver to: ${deliveryAddress}\n`;
+      message += `Delivery Fee: ${deliveryFee}\n\n`;
+      message += `${linkPlaceholder}`;
+      // Add footer and return early because we already have delivery address
+      message += `\n\n_*Thank you for choosing AnyWare Logistics*_`;
+      await notifyRecipient(phoneNumber, { orderNumber: order.orderNumber, text: message });
+      return;
+    }
+    // For bill/document errands, add delivery address and fee
+    message += `Deliver to: ${deliveryAddress}\n`;
+    message += `Delivery Fee: ${deliveryFee}\n\n`;
+    message += `${linkPlaceholder}`;
+  }
+  else if (orderType === 'ticket') {
+    const ticketData = order.ticketData || {};
+    const agency = ticketData.busAgency || 'Bus Agency';
+    message += `Reserve ticket at: ${agency}\n`;
+    message += `Deliver Ticket at: ${deliveryAddress}\n`;
+    message += `Delivery Fee: ${deliveryFee}\n\n`;
+    message += `${linkPlaceholder}`;
+  }
+  else {
+    // Fallback for any other type (bulk, etc.)
+    message += `Order #${order.orderNumber}\n`;
+    message += `Deliver to: ${deliveryAddress}\n`;
+    message += `Delivery Fee: ${deliveryFee}\n\n`;
+    message += `${linkPlaceholder}`;
+  }
+
+  // Add footer
+  message += `\n\n_*Thank you for choosing AnyWare Logistics*_`;
+
+  // Send as a plain text message (not using the template function)
   try {
     const response = await axios.post(
       `${process.env.WASENDER_BASE_URL}/send-message`,
@@ -108,9 +178,8 @@ const sendRiderNotification = async (phoneNumber, order) => {
     console.log(`✅ Rider notification sent to ${phoneNumber} for order ${order.orderNumber}`);
     return response.data;
   } catch (err) {
-    console.error(`❌ Failed to send rider notification via plain message to ${phoneNumber}:`, err.message);
+    console.error(`❌ Failed to send rider notification to ${phoneNumber}:`, err.message);
     // Fallback to template-based notification
-    console.log(`⚠️ Falling back to template-based notification for rider ${phoneNumber}`);
     const orderDetails = {
       orderNumber: order.orderNumber,
       status: "New Order Available",

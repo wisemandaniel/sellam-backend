@@ -121,14 +121,14 @@ async function verifyOTPCode(phoneNumber, userCode) {
 }
 
 /**
- * Send a detailed, professional order notification via WhatsApp.
- * Supports business orders (with item list), errands, tickets, random deliveries, and bulk.
+ * Send a detailed, professional order notification to the client.
+ * Removes order number, date, customer name, notes.
+ * Uses status emoji (✅ for confirmed) and underlines section headings.
  */
 async function sendOrderNotification(phoneNumber, orderDetails) {
   if (!WASENDER_API_KEY) throw new Error('WASENDER_API_KEY not configured');
 
   const {
-    orderNumber,
     status,
     type = 'business',
     items = [],
@@ -141,92 +141,86 @@ async function sendOrderNotification(phoneNumber, orderDetails) {
     total = 0,
     deliveryAddress = '',
     pickupAddress = '',
-    customerName = '',
-    notes = '',
-    createdAt = new Date(),
-    riderName = '',
   } = orderDetails;
 
-  // Helper to format currency (XAF)
   const formatMoney = (amount) => `${Math.round(amount).toLocaleString()} CFA`;
 
-  // Build header
-  let message = `ORDER UPDATE\n\n`;
-  message += `Order #: ${orderNumber}\n`;
-  message += `Status: ${status.toUpperCase()}\n`;
-  message += `Date: ${new Date(createdAt).toLocaleString()}\n`;
+  // Build header with status
+  let message = '';
+  if (status === 'Confirmed') {
+    message += `✅ *ORDER CONFIRMED*\n\n`;
+  } else if (status === 'Delivered') {
+    message += `📦 *ORDER DELIVERED*\n\n`;
+  } else if (status === 'Accepted') {
+    message += `🛵 *ORDER ACCEPTED*\n\n`;
+  } else if (status === 'Picked Up') {
+    message += `📦 *ORDER PICKED UP*\n\n`;
+  } else {
+    message += `*ORDER UPDATE*\n\n`;
+  }
 
-  // Customer info (if available)
-  if (customerName) message += `Customer: ${customerName}\n`;
-
-  // Order type specific details
+  // ========== BUSINESS ORDER ==========
   if (type === 'business' && items.length > 0) {
-    message += `\n--- ITEMS ---\n`;
-    let itemLines = [];
+    message += `_ITEMS_\n`;  // underlined
     items.forEach((item, idx) => {
-      const line = `${idx+1}. ${item.name} x${item.quantity} — ${formatMoney(item.price)} = ${formatMoney(item.price * item.quantity)}`;
-      itemLines.push(line);
+      const lineTotal = item.price * item.quantity;
+      message += `${idx+1}. ${item.name} x${item.quantity} — ${formatMoney(item.price)} = ${formatMoney(lineTotal)}\n`;
     });
-    message += itemLines.join('\n');
-    message += `\n\nSubtotal: ${formatMoney(subtotal)}`;
+    message += `\nSubtotal: ${formatMoney(subtotal)}`;
     message += `\nDelivery Fee: ${formatMoney(deliveryFee)}`;
-    message += `\nTOTAL: ${formatMoney(total)}`;
+    message += `\n*TOTAL: ${formatMoney(total)}*\n`;
   }
+
+  // ========== ERRAND ORDER ==========
   else if (type === 'errand' && errandItems.length > 0) {
-    message += `\n--- ERRAND ITEMS ---\n`;
+    message += `_ITEMS_\n`;
     errandItems.forEach((item, idx) => {
-      message += `${idx+1}. ${item.name} (${item.quantity}x) — ${formatMoney(item.price * item.quantity)}\n`;
+      const lineTotal = item.price * item.quantity;
+      message += `${idx+1}. ${item.name} x${item.quantity} — ${formatMoney(item.price)} = ${formatMoney(lineTotal)}\n`;
     });
-    message += `\nTotal: ${formatMoney(total)}`;
+    message += `\nTotal: ${formatMoney(total)}\n`;
   }
+
+  // ========== TICKET ORDER ==========
   else if (type === 'ticket') {
-    message += `\n--- TICKET DETAILS ---\n`;
+    message += `_TICKET DETAILS_\n`;
     message += `Agency: ${ticketData.busAgency || 'N/A'}\n`;
     message += `From: ${ticketData.departureCity || 'N/A'} → To: ${ticketData.destination || 'N/A'}\n`;
-    message += `Departure: ${ticketData.departureTime || 'N/A'}\n`;
+    message += `Departure: ${ticketData.departureTime ? new Date(ticketData.departureTime).toLocaleString() : 'N/A'}\n`;
     message += `Seat(s): ${ticketData.seatNumber || 'N/A'}\n`;
-    message += `Passenger: ${ticketData.passengerName || 'N/A'}\n`;
     message += `Price: ${formatMoney(ticketData.price || 0)}\n`;
     message += `Service Fee: ${formatMoney(deliveryFee)}\n`;
-    message += `Total: ${formatMoney(total)}`;
+    message += `*TOTAL: ${formatMoney(total)}*\n`;
   }
+
+  // ========== RANDOM DELIVERY ==========
   else if (type === 'random') {
-    message += `\n--- DELIVERY DETAILS ---\n`;
+    message += `_DELIVERY DETAILS_\n`;
     message += `Item: ${deliveryData.itemDescription || 'N/A'}\n`;
     message += `Pickup: ${deliveryData.pickupAddress || pickupAddress || 'N/A'}\n`;
     message += `Delivery: ${deliveryAddress}\n`;
-    message += `Sender: ${deliveryData.senderNumber || 'N/A'}\n`;
-    message += `Receiver: ${deliveryData.receiverNumber || 'N/A'}\n`;
-    message += `Total: ${formatMoney(total)}`;
+    message += `Total: ${formatMoney(total)}\n`;
   }
+
+  // ========== BULK ORDER ==========
   else if (type === 'bulk') {
-    message += `\n--- BULK ORDER ---\n`;
+    message += `_BULK ORDER_\n`;
     message += `Parcels: ${bulkData.parcels ? bulkData.parcels.length : 0}\n`;
     if (bulkData.type === 'pickup') {
       message += `Pickup type: Collect from multiple locations → deliver to ${bulkData.receiverAddress || deliveryAddress}\n`;
     } else {
       message += `Delivery type: Pickup from ${bulkData.pickupAddress || pickupAddress} → deliver to multiple addresses\n`;
     }
-    message += `Total: ${formatMoney(total)}`;
+    message += `Total: ${formatMoney(total)}\n`;
   }
 
-  // Delivery address (always show)
+  // Always show delivery address
   if (deliveryAddress) {
-    message += `\n\nDelivery Address:\n${deliveryAddress}`;
-  }
-
-  // Additional notes
-  if (notes) {
-    message += `\n\nNotes: ${notes}`;
-  }
-
-  // Rider name (if assigned)
-  if (riderName) {
-    message += `\n\nAssigned Rider: ${riderName}`;
+    message += `\n*Delivery Address:*\n${deliveryAddress}`;
   }
 
   // Footer
-  message += `\n\nThank you for choosing AnyWare Logistics.`;
+  message += `\n\n_*Thank you for choosing AnyWare Logistics*_`;
 
   try {
     const response = await axios.post(
