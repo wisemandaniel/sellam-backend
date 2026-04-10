@@ -3,6 +3,9 @@ const User = require("../models/User");
 const Store = require("../models/Store");
 const { sendOrderNotification } = require("./messageServices");
 
+// Track which orders have had notifications sent (to avoid duplicates)
+const notifiedOrders = new Set();
+
 const formatPhoneNumber = (phone) => {
   if (!phone) return null;
   const cleaned = String(phone).replace(/\D/g, "");
@@ -32,6 +35,7 @@ const notifyRecipient = async (phoneNumber, orderDetails) => {
   }
 };
 
+// Client notification – full details
 const notifyClient = async (order, status, extra = {}) => {
   const clientPhone = formatPhoneNumber(order.phone);
   if (!clientPhone) {
@@ -55,7 +59,7 @@ const notifyClient = async (order, status, extra = {}) => {
     deliveryFee: order.deliveryFee,
     total: order.total,
     deliveryAddress: order.deliveryAddress,
-    pickupAddress: order.deliveryData?.pickupAddress || order.bulkData?.pickupAddress || '',
+    pickupAddress: order.deliveryData?.pickupAddress || '',
     customerName: order.user?.name || '',
     notes: order.notes,
     createdAt: order.createdAt,
@@ -64,31 +68,47 @@ const notifyClient = async (order, status, extra = {}) => {
   await notifyRecipient(clientPhone, orderDetails);
 };
 
+// Rider notification – simplified (only essentials)
 const notifyRiders = async (order) => {
   const riderPhones = await getRiderPhones();
   if (riderPhones.length === 0) return;
-  const orderDetails = {
+
+  // Build simplified order details for riders
+  let orderDetails = {
     orderNumber: order.orderNumber,
     status: "New Order Available",
     type: order.type,
     total: order.total,
     deliveryAddress: order.deliveryAddress,
-    itemsCount: order.items ? order.items.length : 0,
-    subtotal: order.subtotal,
-    deliveryFee: order.deliveryFee,
     customerName: order.user?.name || '',
-    notes: order.notes,
     createdAt: order.createdAt,
-    // For random deliveries, include pickup address and item description
-    pickupAddress: order.deliveryData?.pickupAddress,
-    itemDescription: order.deliveryData?.itemDescription,
   };
+
+  // Add type-specific essential info
+  if (order.type === 'business') {
+    orderDetails.itemsCount = order.items?.length || 0;
+    orderDetails.subtotal = order.subtotal;
+    orderDetails.deliveryFee = order.deliveryFee;
+  } else if (order.type === 'random') {
+    // For random delivery, include pickup and item description (no sender/receiver)
+    orderDetails.pickupAddress = order.deliveryData?.pickupAddress || 'Not provided';
+    orderDetails.itemDescription = order.deliveryData?.itemDescription || 'Parcel';
+  } else if (order.type === 'errand') {
+    orderDetails.itemsCount = order.errandItems?.length || 0;
+  } else if (order.type === 'ticket') {
+    orderDetails.destination = order.ticketData?.destination;
+    orderDetails.departureTime = order.ticketData?.departureTime;
+  } else if (order.type === 'bulk') {
+    orderDetails.parcelsCount = order.bulkData?.parcels?.length || 0;
+  }
+
   for (const phone of riderPhones) {
     await notifyRecipient(phone, orderDetails);
   }
   console.log(`Notified ${riderPhones.length} riders about order ${order.orderNumber}`);
 };
 
+// Notify businesses (full details)
 const notifyBusinessesForOrder = async (order) => {
   const businessIds = [...new Set(order.items.map(item => item.business?.toString()).filter(Boolean))];
   if (businessIds.length === 0) return;
@@ -118,6 +138,7 @@ const notifyBusinessesForOrder = async (order) => {
   }
 };
 
+// Notify admin (full details for non‑business orders)
 const notifyAdmin = async (order, type) => {
   const adminPhone = process.env.ADMIN_NOTIFICATION_PHONE;
   if (!adminPhone) return;
@@ -134,9 +155,15 @@ const notifyAdmin = async (order, type) => {
   await notifyRecipient(adminPhone, orderDetails);
 };
 
+// Helper to check if notifications have already been sent for an order
+const hasOrderBeenNotified = (orderId) => notifiedOrders.has(orderId.toString());
+const markOrderNotified = (orderId) => notifiedOrders.add(orderId.toString());
+
 module.exports = {
   notifyClient,
   notifyRiders,
   notifyBusinessesForOrder,
   notifyAdmin,
+  hasOrderBeenNotified,
+  markOrderNotified,
 };
