@@ -1,7 +1,7 @@
 /**
  * controllers/orderController.js
  * Full delivery/order logic – notifications handled by external service.
- * Includes duplicate notification prevention.
+ * Includes duplicate notification prevention using order.notificationsSent.
  */
 
 const Order = require("../models/Order");
@@ -17,8 +17,6 @@ const {
   notifyRiders,
   notifyBusinessesForOrder,
   notifyAdmin,
-  hasOrderBeenNotified,
-  markOrderNotified,
 } = require("../services/notificationServices");
 
 // ================================
@@ -370,8 +368,8 @@ const confirmOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    const orderId = order._id.toString();
-    if (!hasOrderBeenNotified(orderId)) {
+    // Send notifications only once
+    if (!order.notificationsSent) {
       const populatedOrder = await Order.findById(order._id)
         .populate('user', 'name phone')
         .populate({
@@ -385,7 +383,9 @@ const confirmOrder = async (req, res) => {
       if (populatedOrder.type === 'business') {
         await notifyBusinessesForOrder(populatedOrder);
       }
-      markOrderNotified(orderId);
+
+      order.notificationsSent = true;
+      await order.save();
     } else {
       console.log(`⚠️ Notifications already sent for order ${order.orderNumber}, skipping duplicate.`);
     }
@@ -450,8 +450,7 @@ const adminConfirmOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    const orderId = order._id.toString();
-    if (!hasOrderBeenNotified(orderId)) {
+    if (!order.notificationsSent) {
       const populatedOrder = await Order.findById(order._id)
         .populate('user', 'name phone')
         .populate({
@@ -465,7 +464,9 @@ const adminConfirmOrder = async (req, res) => {
       if (populatedOrder.type === 'business') {
         await notifyBusinessesForOrder(populatedOrder);
       }
-      markOrderNotified(orderId);
+
+      order.notificationsSent = true;
+      await order.save();
     } else {
       console.log(`⚠️ Notifications already sent for order ${order.orderNumber}, skipping duplicate.`);
     }

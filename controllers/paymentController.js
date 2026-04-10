@@ -7,8 +7,6 @@ const {
   notifyClient,
   notifyRiders,
   notifyBusinessesForOrder,
-  hasOrderBeenNotified,
-  markOrderNotified,
 } = require('../services/notificationServices');
 
 // ==================== CONFIGURATION & VALIDATION ====================
@@ -241,7 +239,7 @@ exports.createPayment = async (req, res) => {
 
           if (statusData.status === 'SUCCESSFUL') {
             const linkedOrder = await Order.findById(savedPayment.order);
-            if (linkedOrder) {
+            if (linkedOrder && !linkedOrder.notificationsSent) {
               linkedOrder.paymentStatus = 'paid';
               linkedOrder.paymentMethod = 'momo';
               linkedOrder.status = 'confirmed';
@@ -249,21 +247,21 @@ exports.createPayment = async (req, res) => {
               await linkedOrder.save();
               console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
 
-              if (!hasOrderBeenNotified(linkedOrder._id.toString())) {
-                const populatedOrder = await Order.findById(linkedOrder._id)
-                  .populate('user', 'name phone')
-                  .populate({
-                    path: 'items.product',
-                    select: 'name price',
-                    populate: { path: 'business', select: 'name' }
-                  });
-                await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-                await notifyRiders(populatedOrder);
-                if (populatedOrder.type === 'business') {
-                  await notifyBusinessesForOrder(populatedOrder);
-                }
-                markOrderNotified(linkedOrder._id.toString());
+              const populatedOrder = await Order.findById(linkedOrder._id)
+                .populate('user', 'name phone')
+                .populate({
+                  path: 'items.product',
+                  select: 'name price',
+                  populate: { path: 'business', select: 'name' }
+                });
+              await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+              await notifyRiders(populatedOrder);
+              if (populatedOrder.type === 'business') {
+                await notifyBusinessesForOrder(populatedOrder);
               }
+
+              linkedOrder.notificationsSent = true;
+              await linkedOrder.save();
             }
           }
 
@@ -334,29 +332,29 @@ exports.fapshiWebhook = async (req, res) => {
 
     if (newStatus === 'SUCCESSFUL' && payment.order) {
       const order = await Order.findById(payment.order);
-      if (order) {
+      if (order && !order.notificationsSent) {
         order.paymentStatus = 'paid';
         order.paymentMethod = 'momo';
         order.status = 'confirmed';
         order.confirmedAt = new Date();
         await order.save();
-        console.log(`✅ Order ${order.orderNumber} marked as paid and confirmed via webhook`);
+        console.log(`✅ Order ${order.orderNumber} confirmed via webhook`);
 
-        if (!hasOrderBeenNotified(order._id.toString())) {
-          const populatedOrder = await Order.findById(order._id)
-            .populate('user', 'name phone')
-            .populate({
-              path: 'items.product',
-              select: 'name price',
-              populate: { path: 'business', select: 'name' }
-            });
-          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-          await notifyRiders(populatedOrder);
-          if (populatedOrder.type === 'business') {
-            await notifyBusinessesForOrder(populatedOrder);
-          }
-          markOrderNotified(order._id.toString());
+        const populatedOrder = await Order.findById(order._id)
+          .populate('user', 'name phone')
+          .populate({
+            path: 'items.product',
+            select: 'name price',
+            populate: { path: 'business', select: 'name' }
+          });
+        await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+        await notifyRiders(populatedOrder);
+        if (populatedOrder.type === 'business') {
+          await notifyBusinessesForOrder(populatedOrder);
         }
+
+        order.notificationsSent = true;
+        await order.save();
       }
     }
 
@@ -428,7 +426,7 @@ exports.getTransactionStatus = async (req, res) => {
 
       if (newStatus === 'SUCCESSFUL' && payment.order) {
         const order = await Order.findById(payment.order);
-        if (order) {
+        if (order && !order.notificationsSent) {
           order.paymentStatus = 'paid';
           order.paymentMethod = 'momo';
           order.status = 'confirmed';
@@ -436,21 +434,21 @@ exports.getTransactionStatus = async (req, res) => {
           await order.save();
           console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
 
-          if (!hasOrderBeenNotified(order._id.toString())) {
-            const populatedOrder = await Order.findById(order._id)
-              .populate('user', 'name phone')
-              .populate({
-                path: 'items.product',
-                select: 'name price',
-                populate: { path: 'business', select: 'name' }
-              });
-            await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-            await notifyRiders(populatedOrder);
-            if (populatedOrder.type === 'business') {
-              await notifyBusinessesForOrder(populatedOrder);
-            }
-            markOrderNotified(order._id.toString());
+          const populatedOrder = await Order.findById(order._id)
+            .populate('user', 'name phone')
+            .populate({
+              path: 'items.product',
+              select: 'name price',
+              populate: { path: 'business', select: 'name' }
+            });
+          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+          await notifyRiders(populatedOrder);
+          if (populatedOrder.type === 'business') {
+            await notifyBusinessesForOrder(populatedOrder);
           }
+
+          order.notificationsSent = true;
+          await order.save();
         }
       }
 
