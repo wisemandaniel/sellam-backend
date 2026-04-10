@@ -3,18 +3,9 @@ const mongoose = require("mongoose");
 // Sub-schemas for different order types
 const orderItemSchema = new mongoose.Schema(
   {
-    product: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Product",
-    },
-    store: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Store",
-    },
-    business: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Business",
-    },
+    product: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+    store: { type: mongoose.Schema.Types.ObjectId, ref: "Store" },
+    business: { type: mongoose.Schema.Types.ObjectId, ref: "Business" },
     quantity: { type: Number, min: 1 },
     price: { type: Number, min: 0 },
   },
@@ -34,27 +25,18 @@ const errandItemSchema = new mongoose.Schema(
 const ticketDataSchema = new mongoose.Schema(
   {
     busAgency: { type: String, required: true },
-    seatNumber: { type: String, required: true },      // comma-separated primary seats
-    passengerName: { type: String, required: true },   // renamed from idCard
+    seatNumber: { type: String, required: true },
+    passengerName: { type: String, required: true },
     departureTime: { type: Date, required: true },
     destination: { type: String, required: true },
     departureCity: { type: String, required: true },
-    price: { type: Number, default: 0 },               // total ticket price (seats × pricePerSeat)
+    price: { type: Number, default: 0 },
     backupSeats: { type: [String], default: [] },
-    travelTimeOfDay: {
-      type: String,
-      enum: ['morning', 'afternoon', 'evening', 'night'],
-      default: 'morning'
-    },
-    passengerIDNumber: { type: String, default: '' },  // ID card number
+    travelTimeOfDay: { type: String, enum: ['morning', 'afternoon', 'evening', 'night'], default: 'morning' },
+    passengerIDNumber: { type: String, default: '' },
     idPhotoFront: { type: String, default: '' },
     idPhotoBack: { type: String, default: '' },
-    agencyDetails: {
-      id: { type: String },
-      departureTime: { type: String },
-      arrivalTime: { type: String },
-      busType: { type: String }
-    },
+    agencyDetails: { type: Object, default: {} },
     serviceFee: { type: Number, default: 1500 },
     pricePerSeat: { type: Number, default: 0 },
     seatCount: { type: Number, default: 0 }
@@ -104,11 +86,7 @@ const orderSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     rider: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     
-    type: {
-      type: String,
-      enum: ["business", "errand", "ticket", "random", "bulk"],
-      default: "business"
-    },
+    type: { type: String, enum: ["business", "errand", "ticket", "random", "bulk"], default: "business" },
     
     items: [orderItemSchema],
     errandItems: [errandItemSchema],
@@ -125,23 +103,14 @@ const orderSchema = new mongoose.Schema(
       enum: ["pending", "confirmed", "accepted", "picked_up", "delivered", "cancelled", "rejected"],
       default: "pending",
     },
-    paymentStatus: {
-      type: String,
-      enum: ["unpaid", "paid"],
-      default: "unpaid",
-    },
-    paymentMethod: {
-      type: String,
-      enum: ["cash", "momo", 'np'],
-      default: "np",
-    },
+    paymentStatus: { type: String, enum: ["unpaid", "paid"], default: "unpaid" },
+    paymentMethod: { type: String, enum: ["cash", "momo", 'np'], default: "np" },
     
     deliveryAddress: { type: String, required: true },
     phone: { type: String, required: true },
     notes: { type: String, default: "" },
     distance: { type: Number, default: 0 },
 
-    // ✅ NEW: confirmation timestamp
     confirmedAt: { type: Date },
     acceptedAt: { type: Date },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -151,11 +120,12 @@ const orderSchema = new mongoose.Schema(
     cancelledAt: { type: Date },
 
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    isAdminCreated: { type: Boolean, default: false }
+    isAdminCreated: { type: Boolean, default: false },
+
+    // ✅ Prevent duplicate notifications
+    notificationsSent: { type: Boolean, default: false }
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 // Indexes

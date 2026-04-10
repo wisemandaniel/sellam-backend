@@ -1,10 +1,7 @@
-// services/notificationService.js
 const User = require("../models/User");
 const Store = require("../models/Store");
+const axios = require("axios");
 const { sendOrderNotification } = require("./messageServices");
-
-// Track which orders have had notifications sent (to avoid duplicates)
-const notifiedOrders = new Set();
 
 const formatPhoneNumber = (phone) => {
   if (!phone) return null;
@@ -68,42 +65,59 @@ const notifyClient = async (order, status, extra = {}) => {
   await notifyRecipient(clientPhone, orderDetails);
 };
 
-// Rider notification – simplified (only essentials)
+// Rider notification – simplified, using plain WhatsApp message
+const sendRiderNotification = async (phoneNumber, order) => {
+  if (!phoneNumber) return;
+  const formatMoney = (amount) => `${Math.round(amount).toLocaleString()} CFA`;
+  let message = `🚚 *NEW ORDER AVAILABLE*\n\n`;
+  message += `Order #: ${order.orderNumber}\n`;
+  
+  if (order.type === 'random') {
+    message += `Item: ${order.deliveryData?.itemDescription || 'Parcel'}\n`;
+    message += `Pickup: ${order.deliveryData?.pickupAddress || 'Not provided'}\n`;
+    message += `Delivery: ${order.deliveryAddress}\n`;
+  } else if (order.type === 'business') {
+    message += `Items: ${order.items?.length || 0}\n`;
+    message += `Delivery: ${order.deliveryAddress}\n`;
+  } else if (order.type === 'errand') {
+    message += `Errand items: ${order.errandItems?.length || 0}\n`;
+    message += `Delivery: ${order.deliveryAddress}\n`;
+  } else if (order.type === 'ticket') {
+    message += `Ticket to: ${order.ticketData?.destination || 'N/A'}\n`;
+    message += `Departure: ${order.ticketData?.departureTime || 'N/A'}\n`;
+  } else if (order.type === 'bulk') {
+    message += `Bulk order: ${order.bulkData?.parcels?.length || 0} parcels\n`;
+    message += `Delivery: ${order.deliveryAddress}\n`;
+  }
+  
+  message += `\nTotal: ${formatMoney(order.total)}\n`;
+  message += `\nThank you for choosing AnyWare Logistics.`;
+  
+  try {
+    const response = await axios.post(
+      `${process.env.WASENDER_BASE_URL}/send-message`,
+      { to: phoneNumber, text: message },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WASENDER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      }
+    );
+    console.log(`✅ Rider notification sent to ${phoneNumber} for order ${order.orderNumber}`);
+    return response.data;
+  } catch (err) {
+    console.error(`❌ Failed to send rider notification to ${phoneNumber}:`, err.message);
+    throw err;
+  }
+};
+
 const notifyRiders = async (order) => {
   const riderPhones = await getRiderPhones();
   if (riderPhones.length === 0) return;
-
-  // Build simplified order details for riders
-  let orderDetails = {
-    orderNumber: order.orderNumber,
-    status: "New Order Available",
-    type: order.type,
-    total: order.total,
-    deliveryAddress: order.deliveryAddress,
-    customerName: order.user?.name || '',
-    createdAt: order.createdAt,
-  };
-
-  // Add type-specific essential info
-  if (order.type === 'business') {
-    orderDetails.itemsCount = order.items?.length || 0;
-    orderDetails.subtotal = order.subtotal;
-    orderDetails.deliveryFee = order.deliveryFee;
-  } else if (order.type === 'random') {
-    // For random delivery, include pickup and item description (no sender/receiver)
-    orderDetails.pickupAddress = order.deliveryData?.pickupAddress || 'Not provided';
-    orderDetails.itemDescription = order.deliveryData?.itemDescription || 'Parcel';
-  } else if (order.type === 'errand') {
-    orderDetails.itemsCount = order.errandItems?.length || 0;
-  } else if (order.type === 'ticket') {
-    orderDetails.destination = order.ticketData?.destination;
-    orderDetails.departureTime = order.ticketData?.departureTime;
-  } else if (order.type === 'bulk') {
-    orderDetails.parcelsCount = order.bulkData?.parcels?.length || 0;
-  }
-
   for (const phone of riderPhones) {
-    await notifyRecipient(phone, orderDetails);
+    await sendRiderNotification(phone, order);
   }
   console.log(`Notified ${riderPhones.length} riders about order ${order.orderNumber}`);
 };
@@ -155,15 +169,9 @@ const notifyAdmin = async (order, type) => {
   await notifyRecipient(adminPhone, orderDetails);
 };
 
-// Helper to check if notifications have already been sent for an order
-const hasOrderBeenNotified = (orderId) => notifiedOrders.has(orderId.toString());
-const markOrderNotified = (orderId) => notifiedOrders.add(orderId.toString());
-
 module.exports = {
   notifyClient,
   notifyRiders,
   notifyBusinessesForOrder,
   notifyAdmin,
-  hasOrderBeenNotified,
-  markOrderNotified,
 };
