@@ -3,11 +3,12 @@ const Order = require('../models/Order');
 const Transaction = require('../models/transaction');
 const axios = require('axios');
 
-// Import notification helpers
 const {
   notifyClient,
   notifyRiders,
   notifyBusinessesForOrder,
+  hasOrderBeenNotified,
+  markOrderNotified,
 } = require('../services/notificationServices');
 
 // ==================== CONFIGURATION & VALIDATION ====================
@@ -131,7 +132,6 @@ const getFapshiTransactionStatus = async trans_id => {
 
 /**
  * Create a new payment – initiates transaction with Fapshi and stores PENDING status.
- * ✅ Now accepts `orderNumber` instead of MongoDB `_id`.
  */
 exports.createPayment = async (req, res) => {
   const userId = getUserId(req);
@@ -142,7 +142,6 @@ exports.createPayment = async (req, res) => {
   try {
     const { amount, from, orderNumber } = req.body;
 
-    // Validate input
     if (!amount || !from || !orderNumber) {
       return res.status(400).json({
         success: false,
@@ -156,7 +155,6 @@ exports.createPayment = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid phone number' });
     }
 
-    // Find order by orderNumber and verify ownership
     const order = await Order.findOne({ orderNumber, user: userId });
     if (!order) {
       return res.status(404).json({
@@ -167,7 +165,6 @@ exports.createPayment = async (req, res) => {
 
     const normalizedFrom = normalizePhoneNumber(from);
 
-    // Initiate Fapshi payment
     let fapshiResponse;
     try {
       fapshiResponse = await initiateFapshiPayment(
@@ -205,7 +202,6 @@ exports.createPayment = async (req, res) => {
       return res.status(500).json({ success: false, error: 'No transaction ID received' });
     }
 
-    // Create Payment record with order ObjectId
     const payment = new Payment({
       user: userId,
       order: order._id,
@@ -218,7 +214,6 @@ exports.createPayment = async (req, res) => {
 
     const savedPayment = await payment.save();
 
-    // Create Transaction record
     if (Transaction) {
       try {
         const transaction = new Transaction({
@@ -236,7 +231,7 @@ exports.createPayment = async (req, res) => {
       }
     }
 
-    // Asynchronously check initial status (non-blocking)
+    // Asynchronously check initial status
     setImmediate(async () => {
       try {
         const statusData = await getFapshiTransactionStatus(transactionId);
@@ -244,7 +239,6 @@ exports.createPayment = async (req, res) => {
           savedPayment.status = statusData.status;
           await savedPayment.save();
 
-          // If payment succeeded, update order status and send notifications
           if (statusData.status === 'SUCCESSFUL') {
             const linkedOrder = await Order.findById(savedPayment.order);
             if (linkedOrder) {
@@ -255,18 +249,20 @@ exports.createPayment = async (req, res) => {
               await linkedOrder.save();
               console.log(`✅ Order ${linkedOrder.orderNumber} confirmed via initial status check`);
 
-              // Re‑populate order for notifications
-              const populatedOrder = await Order.findById(linkedOrder._id)
-                .populate('user', 'name phone')
-                .populate({
-                  path: 'items.product',
-                  select: 'name price',
-                  populate: { path: 'business', select: 'name' }
-                });
-              await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-              await notifyRiders(populatedOrder);
-              if (populatedOrder.type === 'business') {
-                await notifyBusinessesForOrder(populatedOrder);
+              if (!hasOrderBeenNotified(linkedOrder._id.toString())) {
+                const populatedOrder = await Order.findById(linkedOrder._id)
+                  .populate('user', 'name phone')
+                  .populate({
+                    path: 'items.product',
+                    select: 'name price',
+                    populate: { path: 'business', select: 'name' }
+                  });
+                await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+                await notifyRiders(populatedOrder);
+                if (populatedOrder.type === 'business') {
+                  await notifyBusinessesForOrder(populatedOrder);
+                }
+                markOrderNotified(linkedOrder._id.toString());
               }
             }
           }
@@ -298,7 +294,6 @@ exports.createPayment = async (req, res) => {
 
 /**
  * Fapshi Webhook Endpoint – receives final status and updates local records.
- * ✅ Also updates the linked order if payment is successful and sends notifications.
  */
 exports.fapshiWebhook = async (req, res) => {
   try {
@@ -315,14 +310,12 @@ exports.fapshiWebhook = async (req, res) => {
 
     console.log(`🔄 Processing webhook for transaction: ${transactionId}, status: ${transactionStatus}`);
 
-    // Find payment
     const payment = await Payment.findOne({ transactionId });
     if (!payment) {
       console.log(`⚠️ Payment not found for transaction: ${transactionId}`);
       return res.status(404).json({ error: 'Payment record not found' });
     }
 
-    // Map Fapshi status to internal enum
     let newStatus;
     if (transactionStatus === 'SUCCESSFUL' || transactionStatus === 'SUCCESS') {
       newStatus = 'SUCCESSFUL';
@@ -334,13 +327,11 @@ exports.fapshiWebhook = async (req, res) => {
       newStatus = 'PENDING';
     }
 
-    // Update payment status
     const oldStatus = payment.status;
     payment.status = newStatus;
     await payment.save();
     console.log(`✅ Payment ${payment._id} status updated from ${oldStatus} to ${newStatus}`);
 
-    // If payment is SUCCESSFUL, update the linked order and send notifications
     if (newStatus === 'SUCCESSFUL' && payment.order) {
       const order = await Order.findById(payment.order);
       if (order) {
@@ -351,23 +342,24 @@ exports.fapshiWebhook = async (req, res) => {
         await order.save();
         console.log(`✅ Order ${order.orderNumber} marked as paid and confirmed via webhook`);
 
-        // Re‑populate order for notifications
-        const populatedOrder = await Order.findById(order._id)
-          .populate('user', 'name phone')
-          .populate({
-            path: 'items.product',
-            select: 'name price',
-            populate: { path: 'business', select: 'name' }
-          });
-        await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-        await notifyRiders(populatedOrder);
-        if (populatedOrder.type === 'business') {
-          await notifyBusinessesForOrder(populatedOrder);
+        if (!hasOrderBeenNotified(order._id.toString())) {
+          const populatedOrder = await Order.findById(order._id)
+            .populate('user', 'name phone')
+            .populate({
+              path: 'items.product',
+              select: 'name price',
+              populate: { path: 'business', select: 'name' }
+            });
+          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+          await notifyRiders(populatedOrder);
+          if (populatedOrder.type === 'business') {
+            await notifyBusinessesForOrder(populatedOrder);
+          }
+          markOrderNotified(order._id.toString());
         }
       }
     }
 
-    // Update transaction record if exists
     if (Transaction) {
       const transaction = await Transaction.findOne({ transactionId });
       if (transaction) {
@@ -385,7 +377,6 @@ exports.fapshiWebhook = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error processing Fapshi webhook:', error);
-    // Always return 200 to acknowledge receipt and prevent retries
     return res.status(200).json({
       success: false,
       message: 'Webhook received but processing failed',
@@ -396,7 +387,6 @@ exports.fapshiWebhook = async (req, res) => {
 
 /**
  * Get transaction status – fetches latest status from Fapshi and updates local records if changed.
- * ✅ Also updates order if payment succeeded and sends notifications.
  */
 exports.getTransactionStatus = async (req, res) => {
   const userId = getUserId(req);
@@ -410,18 +400,15 @@ exports.getTransactionStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Transaction ID is required' });
     }
 
-    // Find local payment
     const payment = await Payment.findOne({ transactionId });
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Transaction not found' });
     }
 
-    // Authorization – only the owner can view
     if (payment.user.toString() !== userId.toString()) {
       return res.status(403).json({ success: false, message: 'Not authorized to view this transaction' });
     }
 
-    // Fetch fresh status from Fapshi
     let providerStatus = null;
     try {
       providerStatus = await getFapshiTransactionStatus(transactionId);
@@ -429,7 +416,6 @@ exports.getTransactionStatus = async (req, res) => {
       console.error('⚠️ Failed to get provider status:', error.message);
     }
 
-    // If provider returned a final status and local is still PENDING, update it
     if (providerStatus?.status && providerStatus.status !== 'PENDING' && payment.status === 'PENDING') {
       let newStatus;
       if (providerStatus.status === 'SUCCESSFUL') newStatus = 'SUCCESSFUL';
@@ -440,7 +426,6 @@ exports.getTransactionStatus = async (req, res) => {
       payment.status = newStatus;
       await payment.save();
 
-      // If payment succeeded, update the order and send notifications
       if (newStatus === 'SUCCESSFUL' && payment.order) {
         const order = await Order.findById(payment.order);
         if (order) {
@@ -451,18 +436,20 @@ exports.getTransactionStatus = async (req, res) => {
           await order.save();
           console.log(`✅ Order ${order.orderNumber} confirmed via status polling`);
 
-          // Re‑populate order for notifications
-          const populatedOrder = await Order.findById(order._id)
-            .populate('user', 'name phone')
-            .populate({
-              path: 'items.product',
-              select: 'name price',
-              populate: { path: 'business', select: 'name' }
-            });
-          await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-          await notifyRiders(populatedOrder);
-          if (populatedOrder.type === 'business') {
-            await notifyBusinessesForOrder(populatedOrder);
+          if (!hasOrderBeenNotified(order._id.toString())) {
+            const populatedOrder = await Order.findById(order._id)
+              .populate('user', 'name phone')
+              .populate({
+                path: 'items.product',
+                select: 'name price',
+                populate: { path: 'business', select: 'name' }
+              });
+            await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+            await notifyRiders(populatedOrder);
+            if (populatedOrder.type === 'business') {
+              await notifyBusinessesForOrder(populatedOrder);
+            }
+            markOrderNotified(order._id.toString());
           }
         }
       }
@@ -512,7 +499,6 @@ exports.testFapshiConfig = async (req, res) => {
     tests: {},
   };
 
-  // Test base URL
   try {
     const baseResponse = await axios.get(process.env.FAPSHI_URL, {
       timeout: 5000,
@@ -528,7 +514,6 @@ exports.testFapshiConfig = async (req, res) => {
     results.tests.baseUrl = { error: error.message, code: error.code };
   }
 
-  // Test payment endpoint
   try {
     const testPayment = await initiateFapshiPayment(100, '671234567', 'API Test - Please Ignore');
     results.tests.payment = {

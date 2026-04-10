@@ -1,6 +1,7 @@
 /**
  * controllers/orderController.js
  * Full delivery/order logic – notifications handled by external service.
+ * Includes duplicate notification prevention.
  */
 
 const Order = require("../models/Order");
@@ -11,16 +12,17 @@ const Store = require("../models/Store");
 const Business = require("../models/Business");
 const mongoose = require("mongoose");
 
-// Import notification helpers
 const {
   notifyClient,
   notifyRiders,
   notifyBusinessesForOrder,
   notifyAdmin,
+  hasOrderBeenNotified,
+  markOrderNotified,
 } = require("../services/notificationServices");
 
 // ================================
-// ORDER VALIDATION FUNCTIONS (unchanged)
+// ORDER VALIDATION FUNCTIONS
 // ================================
 const validateErrandItems = (items) => {
   if (!items || items.length === 0) throw new Error("Errand must have at least one item");
@@ -233,7 +235,6 @@ const createOrder = async (req, res) => {
           deliveryAddress: randomDeliveryAddress || deliveryAddress,
           senderNumber, receiverNumber, itemDescription, price: deliveryPrice
         });
-        console.log('🔍 RANDOM DELIVERY DATA:', deliveryData);
         orderData.deliveryData = deliveryData;
         orderData.subtotal = deliveryData.price || 0;
         orderData.deliveryFee = 1000;
@@ -369,19 +370,24 @@ const confirmOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    // Re‑populate order for notifications
-    const populatedOrder = await Order.findById(order._id)
-      .populate('user', 'name phone')
-      .populate({
-        path: 'items.product',
-        select: 'name price',
-        populate: { path: 'business', select: 'name' }
-      });
+    const orderId = order._id.toString();
+    if (!hasOrderBeenNotified(orderId)) {
+      const populatedOrder = await Order.findById(order._id)
+        .populate('user', 'name phone')
+        .populate({
+          path: 'items.product',
+          select: 'name price',
+          populate: { path: 'business', select: 'name' }
+        });
 
-    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-    await notifyRiders(populatedOrder);
-    if (populatedOrder.type === 'business') {
-      await notifyBusinessesForOrder(populatedOrder);
+      await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+      await notifyRiders(populatedOrder);
+      if (populatedOrder.type === 'business') {
+        await notifyBusinessesForOrder(populatedOrder);
+      }
+      markOrderNotified(orderId);
+    } else {
+      console.log(`⚠️ Notifications already sent for order ${order.orderNumber}, skipping duplicate.`);
     }
 
     res.json({
@@ -444,18 +450,24 @@ const adminConfirmOrder = async (req, res) => {
 
     await session.commitTransaction();
 
-    const populatedOrder = await Order.findById(order._id)
-      .populate('user', 'name phone')
-      .populate({
-        path: 'items.product',
-        select: 'name price',
-        populate: { path: 'business', select: 'name' }
-      });
+    const orderId = order._id.toString();
+    if (!hasOrderBeenNotified(orderId)) {
+      const populatedOrder = await Order.findById(order._id)
+        .populate('user', 'name phone')
+        .populate({
+          path: 'items.product',
+          select: 'name price',
+          populate: { path: 'business', select: 'name' }
+        });
 
-    await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
-    await notifyRiders(populatedOrder);
-    if (populatedOrder.type === 'business') {
-      await notifyBusinessesForOrder(populatedOrder);
+      await notifyClient(populatedOrder, 'Confirmed', { itemsCount: populatedOrder.items?.length || 0 });
+      await notifyRiders(populatedOrder);
+      if (populatedOrder.type === 'business') {
+        await notifyBusinessesForOrder(populatedOrder);
+      }
+      markOrderNotified(orderId);
+    } else {
+      console.log(`⚠️ Notifications already sent for order ${order.orderNumber}, skipping duplicate.`);
     }
 
     res.json({
