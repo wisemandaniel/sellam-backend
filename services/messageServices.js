@@ -122,8 +122,6 @@ async function verifyOTPCode(phoneNumber, userCode) {
 
 /**
  * Send a detailed, professional order notification to the client.
- * Removes order number, date, customer name, notes.
- * Uses status emoji (✅ for confirmed) and underlines section headings.
  */
 async function sendOrderNotification(phoneNumber, orderDetails) {
   if (!WASENDER_API_KEY) throw new Error('WASENDER_API_KEY not configured');

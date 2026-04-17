@@ -7,12 +7,7 @@ const Product = require("../models/Product");
 const { createClient } = require('@supabase/supabase-js');
 const { sendOTP, verifyOTPCode, sendOrderNotification } = require("../services/messageServices");
 
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
-
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const DISABLE_OTP_VERIFICATION = process.env.DISABLE_OTP_VERIFICATION === "true";
 
 // --- Helpers ---
@@ -25,33 +20,18 @@ const formatPhoneNumber = (phone) => {
   throw new Error(`Invalid phone number format: ${phone}`);
 };
 
-// Upload profile image to Supabase (unchanged)
+// Upload profile image to Supabase
 const uploadToSupabase = async (file, userId, oldProfileImage = null) => {
   try {
     const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new Error('Only JPEG, PNG, WebP, and GIF images are allowed');
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      throw new Error('Image size must be less than 5MB');
-    }
-
+    if (!allowedMimeTypes.includes(file.mimetype)) throw new Error('Only JPEG, PNG, WebP, and GIF images are allowed');
+    if (file.size > 5 * 1024 * 1024) throw new Error('Image size must be less than 5MB');
     const fileExtension = file.originalname.split('.').pop();
     const fileName = `profile-${userId}-${Date.now()}.${fileExtension}`;
     const filePath = `profile-photos/${fileName}`;
-
-    const { data, error } = await supabase.storage
-      .from('users')
-      .upload(filePath, file.buffer, {
-        contentType: file.mimetype,
-        upsert: true
-      });
-
+    const { data, error } = await supabase.storage.from('users').upload(filePath, file.buffer, { contentType: file.mimetype, upsert: true });
     if (error) throw new Error('Error uploading image: ' + error.message);
-
     const { data: { publicUrl } } = supabase.storage.from('users').getPublicUrl(filePath);
-
-    // Delete old photo if exists
     if (oldProfileImage && oldProfileImage.includes('supabase.co')) {
       try {
         const oldFileName = oldProfileImage.split('/').pop();
@@ -59,7 +39,6 @@ const uploadToSupabase = async (file, userId, oldProfileImage = null) => {
         await supabase.storage.from('users').remove([oldFilePath]);
       } catch (e) { console.warn('Could not delete old photo:', e.message); }
     }
-
     return publicUrl;
   } catch (error) {
     console.error('Upload to Supabase error:', error);
@@ -542,10 +521,23 @@ const getProfile = async (req, res) => {
   }
 };
 
+// ==================== UPDATED UPDATE PROFILE ====================
 const updateProfile = async (req, res) => {
   try {
-    const { name, phone, address, vehicleType, licensePlate } = req.body;
+    const {
+      name,
+      phone,
+      address,
+      vehicleType,
+      licensePlate,
+      guardianName,
+      guardianPhone,
+      idCardUrl,
+      profileImage,
+      isActive,
+    } = req.body;
 
+    // Phone change OTP flow (unchanged)
     if (phone && phone !== req.user.phone) {
       const formattedPhone = formatPhoneNumber(phone);
       const existingUser = await User.findOne({ phone: formattedPhone, _id: { $ne: req.user.id } });
@@ -578,6 +570,11 @@ const updateProfile = async (req, res) => {
     if (address !== undefined) updateData.address = address?.trim();
     if (vehicleType !== undefined) updateData.vehicleType = vehicleType;
     if (licensePlate !== undefined) updateData.licensePlate = vehicleType === 'car' ? licensePlate : "";
+    if (guardianName !== undefined) updateData.guardianName = guardianName?.trim();
+    if (guardianPhone !== undefined) updateData.guardianPhone = guardianPhone?.trim();
+    if (idCardUrl !== undefined) updateData.idCardUrl = idCardUrl;
+    if (profileImage !== undefined) updateData.profileImage = profileImage;
+    if (typeof isActive !== 'undefined') updateData.isActive = isActive === true;
 
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ success: false, message: 'No fields to update' });
@@ -586,8 +583,8 @@ const updateProfile = async (req, res) => {
     let user = await User.findByIdAndUpdate(req.user.id, updateData, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
+    // Recompute profile completeness (name, address, phone)
     user.checkProfileComplete();
-    user.computeIsActive();
     await user.save();
 
     let account = await Account.findOne({ user: user._id });
@@ -616,6 +613,7 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// ==================== DEVICE MANAGEMENT ====================
 const getVerifiedDevices = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
