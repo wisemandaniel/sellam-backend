@@ -38,7 +38,8 @@ const userSchema = new mongoose.Schema(
     // NEW OPTIONAL FIELDS
     guardianName: { type: String, default: "" },
     guardianPhone: { type: String, default: "" },
-    idCardUrl: { type: String, default: "" },
+    idCardFrontUrl: { type: String, default: "" },
+    idCardBackUrl: { type: String, default: "" },
     
     // PASSWORD FIELD
     password: {
@@ -93,7 +94,7 @@ const userSchema = new mongoose.Schema(
 
     isProfileComplete: { type: Boolean, default: false },
     phoneVerified: { type: Boolean, default: false },
-    isActive: { type: Boolean, default: true },   // ← now manually set (default online)
+    isActive: { type: Boolean, default: true },   // now manually set (default online)
     lastLogin: { type: Date, default: Date.now },
     verifiedDevices: [deviceSchema],
     pendingDeviceVerification: {
@@ -132,7 +133,7 @@ userSchema.pre('save', async function(next) {
 // Pre-update middleware for findOneAndUpdate
 userSchema.pre('findOneAndUpdate', async function(next) {
   const update = this.getUpdate();
-  const relevantFields = ['name', 'address', 'phone', 'profileImage', 'guardianName', 'guardianPhone', 'idCardUrl'];
+  const relevantFields = ['name', 'address', 'phone', 'profileImage', 'guardianName', 'guardianPhone', 'idCardFrontUrl', 'idCardBackUrl'];
   
   let shouldRecalc = false;
   if (update.$set) {
