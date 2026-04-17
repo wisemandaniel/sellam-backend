@@ -108,7 +108,7 @@ const notifyClient = async (order, status, extra = {}) => {
   await notifyRecipient(clientPhone, orderDetails);
 };
 
-// Rider notification with emojis (without overdoing)
+// Rider notification – simplified errand as pure shopping
 const sendRiderNotification = async (phoneNumber, order) => {
   if (!phoneNumber) return;
   const formatMoney = (amount) => `${Math.round(amount).toLocaleString()} CFA`;
@@ -143,38 +143,20 @@ const sendRiderNotification = async (phoneNumber, order) => {
     message += `${linkPlaceholder}`;
   }
   else if (orderType === 'errand') {
+    // Errand is now always a shopping errand – no bill payment or transcript special cases
     const errandItems = order.errandItems || [];
     const notes = order.notes || '';
-    const lowerNotes = notes.toLowerCase();
 
-    if (lowerNotes.includes('electricity') || lowerNotes.includes('eneo')) {
-      message += `⚡ *Pay Bill at:* ENEO Head Office\n`;
+    message += `🛒 *Shopping Errand*\n\n`;
+    if (errandItems.length > 0) {
+      message += `*Items to purchase:*\n`;
+      errandItems.forEach(item => {
+        message += `- ${item.name} x${item.quantity} (${formatMoney(item.price)})\n`;
+      });
+    } else {
+      message += `*Item:* ${notes || 'Items not specified'}\n`;
     }
-    else if (lowerNotes.includes('fee') || lowerNotes.includes('bank') || lowerNotes.includes('tuition')) {
-      const bankMatch = notes.match(/bank\s+([A-Za-z\s]+)/i);
-      const bankName = bankMatch ? bankMatch[1].trim() : 'the bank';
-      message += `🏦 *Pay Bill at:* ${bankName}\n`;
-    }
-    else if (lowerNotes.includes('transcript') || lowerNotes.includes('document')) {
-      message += `📄 *Apply and collect transcript at:* University of Buea\n`;
-    }
-    else {
-      message += `🛒 *Buy the following items:*\n`;
-      if (errandItems.length > 0) {
-        errandItems.forEach(item => {
-          message += `- ${item.name} x${item.quantity}\n`;
-        });
-      } else {
-        message += `- ${notes || 'items'}\n`;
-      }
-      message += `📦 *Deliver to:* ${deliveryAddress}\n`;
-      message += `💰 *Delivery Fee:* ${deliveryFee}\n\n`;
-      message += `${linkPlaceholder}`;
-      message += `\n\n_*Thank you for choosing AnyWare Logistics*_`;
-      await notifyRecipient(phoneNumber, { orderNumber: order.orderNumber, text: message });
-      return;
-    }
-    message += `📦 *Deliver to:* ${deliveryAddress}\n`;
+    message += `\n📦 *Deliver to:* ${deliveryAddress}\n`;
     message += `💰 *Delivery Fee:* ${deliveryFee}\n\n`;
     message += `${linkPlaceholder}`;
   }
