@@ -173,27 +173,6 @@ const updateUser = async (req, res) => {
   }
 };
 
-const deleteUser = async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    if (user._id.toString() === req.user.id) {
-      return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
-    }
-    if (user.profileImage && user.profileImage.includes('supabase.co')) {
-      try {
-        const fileName = user.profileImage.split('/').pop();
-        await supabase.storage.from('users').remove([`profile-photos/${fileName}`]);
-      } catch (e) { console.warn('Could not delete profile photo:', e.message); }
-    }
-    await User.findByIdAndDelete(req.params.id);
-    await Account.findOneAndDelete({ user: req.params.id });
-    res.json({ success: true, message: 'User deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error deleting user' });
-  }
-};
-
 // Delete the authenticated user's own account
 const deleteMyAccount = async (req, res) => {
   try {
@@ -201,6 +180,12 @@ const deleteMyAccount = async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+
+    // Delete all orders associated with this user (by user ID and by phone number)
+    const deleteOrdersResult = await Order.deleteMany({
+      $or: [{ user: user._id }, { phone: user.phone }]
+    });
+    console.log(`Deleted ${deleteOrdersResult.deletedCount} orders for user ${user._id}`);
 
     // Delete associated rider account if exists
     await Account.findOneAndDelete({ user: user._id });
@@ -218,13 +203,41 @@ const deleteMyAccount = async (req, res) => {
     // Delete the user document
     await User.findByIdAndDelete(user._id);
 
-    // Note: Orders are kept for analytics but no longer linked to a user.
-    // If you want to anonymize them, you can set user reference to null here.
-
-    res.json({ success: true, message: 'Account deleted successfully' });
+    res.json({ success: true, message: 'Account and associated orders deleted successfully' });
   } catch (error) {
     console.error('Delete account error:', error);
     res.status(500).json({ success: false, message: 'Error deleting account' });
+  }
+};
+
+// Admin delete any user
+const deleteUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (user._id.toString() === req.user.id) {
+      return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+    }
+
+    // Delete all orders associated with this user (by user ID and by phone number)
+    const deleteOrdersResult = await Order.deleteMany({
+      $or: [{ user: user._id }, { phone: user.phone }]
+    });
+    console.log(`Deleted ${deleteOrdersResult.deletedCount} orders for user ${user._id}`);
+
+    // Delete profile image from Supabase storage
+    if (user.profileImage && user.profileImage.includes('supabase.co')) {
+      try {
+        const fileName = user.profileImage.split('/').pop();
+        await supabase.storage.from('users').remove([`profile-photos/${fileName}`]);
+      } catch (e) { console.warn('Could not delete profile photo:', e.message); }
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+    await Account.findOneAndDelete({ user: req.params.id });
+    res.json({ success: true, message: 'User and associated orders deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error deleting user' });
   }
 };
 
