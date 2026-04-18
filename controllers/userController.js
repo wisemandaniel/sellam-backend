@@ -194,6 +194,40 @@ const deleteUser = async (req, res) => {
   }
 };
 
+// Delete the authenticated user's own account
+const deleteMyAccount = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Delete associated rider account if exists
+    await Account.findOneAndDelete({ user: user._id });
+
+    // Delete profile image from Supabase storage
+    if (user.profileImage && user.profileImage.includes('supabase.co')) {
+      try {
+        const fileName = user.profileImage.split('/').pop();
+        await supabase.storage.from('users').remove([`profile-photos/${fileName}`]);
+      } catch (e) {
+        console.warn('Could not delete profile photo:', e.message);
+      }
+    }
+
+    // Delete the user document
+    await User.findByIdAndDelete(user._id);
+
+    // Note: Orders are kept for analytics but no longer linked to a user.
+    // If you want to anonymize them, you can set user reference to null here.
+
+    res.json({ success: true, message: 'Account deleted successfully' });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({ success: false, message: 'Error deleting account' });
+  }
+};
+
 // ==================== USER AUTH & PROFILE FUNCTIONS ====================
 const createOrUpdateUser = async (req, res) => {
   try {
@@ -825,6 +859,7 @@ module.exports = {
   addUser,
   updateUser,
   deleteUser,
+  deleteMyAccount,
   getAllRidersWithStats,
   getClientById,
   getVendorById,
