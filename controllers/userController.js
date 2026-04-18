@@ -371,7 +371,7 @@ const loginUser = async (req, res) => {
     let user = await User.findOne({ phone: formattedPhone });
     
     if (!user) {
-      // Create new user (isApproved defaults to false)
+      // Create new user (incomplete profile by default)
       user = await User.create({
         phone: formattedPhone,
         role,
@@ -394,11 +394,16 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // ✅ NEW: Only check approval if phone is already verified
-    if (user.phoneVerified && user.role === 'rider' && !user.isApproved) {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Your rider account is pending admin approval. Please wait for verification." 
+    // ========== UPDATED APPROVAL CHECK ==========
+    // Only block if:
+    // - phone is verified
+    // - role is rider
+    // - profile is fully complete (all required fields + phone verified)
+    // - not approved by admin
+    if (user.phoneVerified && user.role === 'rider' && user.isProfileComplete && !user.isApproved) {
+      return res.status(403).json({
+        success: false,
+        message: "Your rider account is pending admin approval. Please wait for verification."
       });
     }
 

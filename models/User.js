@@ -35,13 +35,12 @@ const userSchema = new mongoose.Schema(
     address: { type: String, default: "" },
     profileImage: { type: String, default: "" },
     
-    // NEW OPTIONAL FIELDS
+    // Rider-specific fields
     guardianName: { type: String, default: "" },
     guardianPhone: { type: String, default: "" },
     idCardFrontUrl: { type: String, default: "" },
     idCardBackUrl: { type: String, default: "" },
     
-    // PASSWORD FIELD
     password: {
       type: String,
       required: function() {
@@ -67,11 +66,9 @@ const userSchema = new mongoose.Schema(
     // Admin approval for riders
     isApproved: { type: Boolean, default: false },
     
-    // Rating and ranking system
     rating: { type: Number, default: 4.5, min: 0, max: 5 },
     ratingCount: { type: Number, default: 0 },
     
-    // Ranking information (computed)
     ranking: {
       rank: { type: Number, default: 0 },
       totalAgents: { type: Number, default: 0 },
@@ -94,7 +91,7 @@ const userSchema = new mongoose.Schema(
 
     isProfileComplete: { type: Boolean, default: false },
     phoneVerified: { type: Boolean, default: false },
-    isActive: { type: Boolean, default: true },   // now manually set (default online)
+    isActive: { type: Boolean, default: true },
     lastLogin: { type: Date, default: Date.now },
     verifiedDevices: [deviceSchema],
     pendingDeviceVerification: {
@@ -114,7 +111,6 @@ const userSchema = new mongoose.Schema(
 
 // ==================== MIDDLEWARE ====================
 
-// Pre-save: hash password, compute profile completeness (but NOT isActive)
 userSchema.pre('save', async function(next) {
   if (this.isModified('password')) {
     try {
@@ -124,20 +120,17 @@ userSchema.pre('save', async function(next) {
       return next(error);
     }
   }
-  
-  this.checkProfileComplete();   // updates isProfileComplete only
-  // isActive is no longer computed here
+  this.checkProfileComplete();
   next();
 });
 
-// Pre-update middleware for findOneAndUpdate
 userSchema.pre('findOneAndUpdate', async function(next) {
   const update = this.getUpdate();
-  const relevantFields = ['name', 'address', 'phone', 'profileImage', 'guardianName', 'guardianPhone', 'idCardFrontUrl', 'idCardBackUrl'];
+  const riderFields = ['name', 'address', 'phone', 'profileImage', 'guardianName', 'guardianPhone', 'idCardFrontUrl', 'idCardBackUrl', 'vehicleType', 'licensePlate'];
   
   let shouldRecalc = false;
   if (update.$set) {
-    for (const field of relevantFields) {
+    for (const field of riderFields) {
       if (update.$set[field] !== undefined) {
         shouldRecalc = true;
         break;
@@ -145,7 +138,7 @@ userSchema.pre('findOneAndUpdate', async function(next) {
     }
   }
   if (update.$unset) {
-    for (const field of relevantFields) {
+    for (const field of riderFields) {
       if (update.$unset[field] !== undefined) {
         shouldRecalc = true;
         break;
@@ -167,11 +160,9 @@ userSchema.pre('findOneAndUpdate', async function(next) {
       update.$set.isProfileComplete = docToUpdate.isProfileComplete;
     }
   }
-  
   next();
 });
 
-// Post-save: sync with Account model and trigger ranking update
 userSchema.post("save", async function (doc) {
   try {
     const Account = require("./Account");
@@ -227,15 +218,31 @@ userSchema.methods.generateAuthToken = function () {
   return token;
 };
 
-// Check if profile is complete (name, address, phone)
+// ==================== UPDATED PROFILE COMPLETENESS ====================
 userSchema.methods.checkProfileComplete = function () {
-  this.isProfileComplete = !!(this.name && this.address && this.phone);
+  if (this.role === 'rider') {
+    // All fields must be present and phone must be verified
+    const hasRequiredFields = !!(
+      this.name &&
+      this.address &&
+      this.phone &&
+      this.phoneVerified === true &&
+      this.vehicleType &&
+      (this.vehicleType !== 'car' || this.licensePlate) && // licensePlate only for car
+      this.guardianName &&
+      this.guardianPhone &&
+      this.idCardFrontUrl &&
+      this.idCardBackUrl &&
+      this.profileImage
+    );
+    this.isProfileComplete = hasRequiredFields;
+  } else {
+    // For clients, vendors, admins: name, address, phone, and phoneVerified
+    this.isProfileComplete = !!(this.name && this.address && this.phone && this.phoneVerified === true);
+  }
   return this.isProfileComplete;
 };
 
-// isActive is now manually set – no automatic computation
-
-// Device verification methods
 userSchema.methods.isDeviceVerified = function (deviceId) {
   if (!this.verifiedDevices || this.verifiedDevices.length === 0) return false;
   return this.verifiedDevices.some(device => device.deviceId === deviceId && device.isVerified);
