@@ -453,9 +453,9 @@ const loginUser = async (req, res) => {
 
 const verifyOTP = async (req, res) => {
   try {
-    const { phone, otp, deviceId, deviceInfo = {}, operation } = req.body;
-    if (!phone || !otp || !deviceId) {
-      return res.status(400).json({ success: false, message: "Phone, OTP, and deviceId required" });
+    const { phone, otp, deviceId = '', deviceInfo = {}, operation } = req.body;
+    if (!phone || !otp) {
+      return res.status(400).json({ success: false, message: "Phone and OTP are required" });
     }
     const formattedPhone = formatPhoneNumber(phone);
     let user = await User.findOne({ phone: formattedPhone });
