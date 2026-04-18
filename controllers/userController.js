@@ -200,6 +200,12 @@ const deleteMyAccount = async (req, res) => {
       }
     }
 
+     // 🔥 CRITICAL: Remove any pending verification for this phone number
+    await User.updateMany(
+      { 'pendingPhoneVerification.phone': user.phone },
+      { $unset: { pendingPhoneVerification: '' } }
+    );
+
     // Delete the user document
     await User.findByIdAndDelete(user._id);
 
