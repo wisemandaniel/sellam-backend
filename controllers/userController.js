@@ -173,27 +173,6 @@ const updateUser = async (req, res) => {
   }
 };
 
-const deleteUser = async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id);
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    if (user._id.toString() === req.user.id) {
-      return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
-    }
-    if (user.profileImage && user.profileImage.includes('supabase.co')) {
-      try {
-        const fileName = user.profileImage.split('/').pop();
-        await supabase.storage.from('users').remove([`profile-photos/${fileName}`]);
-      } catch (e) { console.warn('Could not delete profile photo:', e.message); }
-    }
-    await User.findByIdAndDelete(req.params.id);
-    await Account.findOneAndDelete({ user: req.params.id });
-    res.json({ success: true, message: 'User deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error deleting user' });
-  }
-};
-
 // Delete the authenticated user's own account
 const deleteMyAccount = async (req, res) => {
   try {
@@ -201,6 +180,12 @@ const deleteMyAccount = async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+
+    // Delete all orders associated with this user (by user ID and by phone number)
+    const deleteOrdersResult = await Order.deleteMany({
+      $or: [{ user: user._id }, { phone: user.phone }]
+    });
+    console.log(`Deleted ${deleteOrdersResult.deletedCount} orders for user ${user._id}`);
 
     // Delete associated rider account if exists
     await Account.findOneAndDelete({ user: user._id });
@@ -218,13 +203,41 @@ const deleteMyAccount = async (req, res) => {
     // Delete the user document
     await User.findByIdAndDelete(user._id);
 
-    // Note: Orders are kept for analytics but no longer linked to a user.
-    // If you want to anonymize them, you can set user reference to null here.
-
-    res.json({ success: true, message: 'Account deleted successfully' });
+    res.json({ success: true, message: 'Account and associated orders deleted successfully' });
   } catch (error) {
     console.error('Delete account error:', error);
     res.status(500).json({ success: false, message: 'Error deleting account' });
+  }
+};
+
+// Admin delete any user
+const deleteUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (user._id.toString() === req.user.id) {
+      return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+    }
+
+    // Delete all orders associated with this user (by user ID and by phone number)
+    const deleteOrdersResult = await Order.deleteMany({
+      $or: [{ user: user._id }, { phone: user.phone }]
+    });
+    console.log(`Deleted ${deleteOrdersResult.deletedCount} orders for user ${user._id}`);
+
+    // Delete profile image from Supabase storage
+    if (user.profileImage && user.profileImage.includes('supabase.co')) {
+      try {
+        const fileName = user.profileImage.split('/').pop();
+        await supabase.storage.from('users').remove([`profile-photos/${fileName}`]);
+      } catch (e) { console.warn('Could not delete profile photo:', e.message); }
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+    await Account.findOneAndDelete({ user: req.params.id });
+    res.json({ success: true, message: 'User and associated orders deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error deleting user' });
   }
 };
 
@@ -235,12 +248,55 @@ const createOrUpdateUser = async (req, res) => {
     if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
     const formattedPhone = formatPhoneNumber(phone);
     let user = await User.findOne({ phone: formattedPhone });
+    
     if (user) {
+      // User exists – check if phone is being changed
+      const phoneChanged = formattedPhone !== user.phone;
+      
+      // If phone is changed, we need OTP verification
+      if (phoneChanged) {
+        // Check if new phone already exists with another user
+        const existingUser = await User.findOne({ phone: formattedPhone, _id: { $ne: user._id } });
+        if (existingUser) {
+          return res.status(400).json({ success: false, message: 'Phone number already in use by another account' });
+        }
+        
+        // Send OTP to new phone
+        if (!DISABLE_OTP_VERIFICATION) {
+          try {
+            await sendOTP(formattedPhone);
+          } catch (err) {
+            return res.status(500).json({ success: false, message: "Failed to send OTP to new number" });
+          }
+        }
+        
+        // Set pending phone verification
+        user.pendingPhoneVerification = {
+          phone: formattedPhone,
+          requestedAt: new Date(),
+          operation: 'update'
+        };
+        await user.save();
+        
+        return res.status(200).json({
+          success: true,
+          requiresOtp: true,
+          message: 'OTP sent to new phone number. Please verify to complete the change.',
+          tempUserId: user._id,
+          phone: formattedPhone
+        });
+      }
+      
+      // No phone change – update other fields normally
       const updateData = {};
       if (name) updateData.name = name;
       if (address) updateData.address = address;
       if (role) updateData.role = role;
-      user = await User.findOneAndUpdate({ phone: formattedPhone }, updateData, { new: true, runValidators: true });
+      
+      if (Object.keys(updateData).length > 0) {
+        user = await User.findOneAndUpdate({ phone: formattedPhone }, updateData, { new: true, runValidators: true });
+      }
+      
       if (deviceId) {
         user.addVerifiedDevice(deviceId, deviceInfo || {});
         await user.save();
@@ -255,6 +311,8 @@ const createOrUpdateUser = async (req, res) => {
         message: "Profile updated successfully",
       });
     }
+    
+    // New user creation
     const existingPending = await User.findOne({ 'pendingPhoneVerification.phone': formattedPhone });
     if (existingPending) {
       return res.status(400).json({
@@ -262,6 +320,7 @@ const createOrUpdateUser = async (req, res) => {
         message: 'Verification already pending for this phone. Please verify or request a new OTP.'
       });
     }
+    
     user = await User.create({
       name: name || "",
       phone: formattedPhone,
@@ -275,9 +334,11 @@ const createOrUpdateUser = async (req, res) => {
         operation: 'create'
       }
     });
+    
     if (!DISABLE_OTP_VERIFICATION) {
       await sendOTP(formattedPhone);
     }
+    
     return res.status(200).json({
       success: true,
       requiresOtp: true,
