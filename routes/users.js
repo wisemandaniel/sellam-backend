@@ -15,7 +15,8 @@ const {
   deleteUser,
   getAllRidersWithStats,
   getClientById,
-  getVendorById // ← Add this import
+  getVendorById, // ← Add this import
+  deleteMyAccount
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middleware/auth');
 const { handleUploadError, upload } = require('../middleware/upload');
@@ -35,6 +36,8 @@ router.get('/profile', protect, getProfile);
 router.put('/profile', protect, updateProfile);
 router.get('/devices', protect, getVerifiedDevices);
 router.delete('/devices/:deviceId', protect, removeDevice);
+// User deletes their own account
+router.delete('/me', protect, deleteMyAccount);
 
 // ADMIN PANEL ROUTES
 router.get('/', protect,  getUsers);
