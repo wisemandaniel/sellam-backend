@@ -369,7 +369,9 @@ const loginUser = async (req, res) => {
     }
     const formattedPhone = formatPhoneNumber(phone);
     let user = await User.findOne({ phone: formattedPhone });
+    
     if (!user) {
+      // Create new user (isApproved defaults to false)
       user = await User.create({
         phone: formattedPhone,
         role,
@@ -391,9 +393,16 @@ const loginUser = async (req, res) => {
         tempUserId: user._id
       });
     }
-    if (user.role === 'rider' && !user.isApproved) {
-      return res.status(403).json({ success: false, message: "Your rider account is pending admin approval." });
+
+    // ✅ NEW: Only check approval if phone is already verified
+    if (user.phoneVerified && user.role === 'rider' && !user.isApproved) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Your rider account is pending admin approval. Please wait for verification." 
+      });
     }
+
+    // For riders, ensure account exists (but don't block)
     if (user.role === 'rider') {
       let account = await Account.findOne({ user: user._id });
       if (!account) {
@@ -404,6 +413,8 @@ const loginUser = async (req, res) => {
         });
       }
     }
+
+    // Disable OTP in dev mode
     if (DISABLE_OTP_VERIFICATION) {
       user.phoneVerified = true;
       user.addVerifiedDevice(deviceId, deviceInfo);
@@ -419,6 +430,8 @@ const loginUser = async (req, res) => {
         message: "Login successful (dev mode)",
       });
     }
+
+    // Phone not verified → send OTP
     if (!user.phoneVerified) {
       try {
         await sendOTP(formattedPhone);
@@ -427,8 +440,14 @@ const loginUser = async (req, res) => {
       }
       user.pendingDeviceVerification = { deviceId, deviceInfo, phone: formattedPhone, requestedAt: new Date() };
       await user.save();
-      return res.json({ success: true, requiresOtp: true, message: "Phone not verified. OTP sent." });
+      return res.json({ 
+        success: true, 
+        requiresOtp: true, 
+        message: "Phone not verified. OTP sent." 
+      });
     }
+
+    // Device not verified → send OTP
     if (!user.isDeviceVerified(deviceId)) {
       try {
         await sendOTP(formattedPhone);
@@ -437,21 +456,27 @@ const loginUser = async (req, res) => {
       }
       user.pendingDeviceVerification = { deviceId, deviceInfo, phone: formattedPhone, requestedAt: new Date() };
       await user.save();
-      return res.json({ success: true, requiresOtp: true, message: "OTP sent for device verification." });
-    } else {
-      user.addVerifiedDevice(deviceId, deviceInfo);
-      await user.save();
-      const token = user.generateAuthToken();
-      const account = await Account.findOne({ user: user._id });
-      return res.json({
-        success: true,
-        requiresOtp: false,
-        data: user,
-        account,
-        token,
-        message: "Login successful",
+      return res.json({ 
+        success: true, 
+        requiresOtp: true, 
+        message: "OTP sent for device verification." 
       });
     }
+
+    // All verified → login
+    user.addVerifiedDevice(deviceId, deviceInfo);
+    await user.save();
+    const token = user.generateAuthToken();
+    const account = await Account.findOne({ user: user._id });
+    return res.json({
+      success: true,
+      requiresOtp: false,
+      data: user,
+      account,
+      token,
+      message: "Login successful",
+    });
+
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message || "Server error" });
   }
