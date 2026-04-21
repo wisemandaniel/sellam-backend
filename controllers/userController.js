@@ -173,24 +173,17 @@ const updateUser = async (req, res) => {
   }
 };
 
-// Delete the authenticated user's own account
 const deleteMyAccount = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-
-    // Delete all orders associated with this user (by user ID and by phone number)
     const deleteOrdersResult = await Order.deleteMany({
       $or: [{ user: user._id }, { phone: user.phone }]
     });
     console.log(`Deleted ${deleteOrdersResult.deletedCount} orders for user ${user._id}`);
-
-    // Delete associated rider account if exists
     await Account.findOneAndDelete({ user: user._id });
-
-    // Delete profile image from Supabase storage
     if (user.profileImage && user.profileImage.includes('supabase.co')) {
       try {
         const fileName = user.profileImage.split('/').pop();
@@ -199,16 +192,11 @@ const deleteMyAccount = async (req, res) => {
         console.warn('Could not delete profile photo:', e.message);
       }
     }
-
-     // 🔥 CRITICAL: Remove any pending verification for this phone number
     await User.updateMany(
       { 'pendingPhoneVerification.phone': user.phone },
       { $unset: { pendingPhoneVerification: '' } }
     );
-
-    // Delete the user document
     await User.findByIdAndDelete(user._id);
-
     res.json({ success: true, message: 'Account and associated orders deleted successfully' });
   } catch (error) {
     console.error('Delete account error:', error);
@@ -216,7 +204,6 @@ const deleteMyAccount = async (req, res) => {
   }
 };
 
-// Admin delete any user
 const deleteUser = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -224,21 +211,16 @@ const deleteUser = async (req, res) => {
     if (user._id.toString() === req.user.id) {
       return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
     }
-
-    // Delete all orders associated with this user (by user ID and by phone number)
     const deleteOrdersResult = await Order.deleteMany({
       $or: [{ user: user._id }, { phone: user.phone }]
     });
     console.log(`Deleted ${deleteOrdersResult.deletedCount} orders for user ${user._id}`);
-
-    // Delete profile image from Supabase storage
     if (user.profileImage && user.profileImage.includes('supabase.co')) {
       try {
         const fileName = user.profileImage.split('/').pop();
         await supabase.storage.from('users').remove([`profile-photos/${fileName}`]);
       } catch (e) { console.warn('Could not delete profile photo:', e.message); }
     }
-
     await User.findByIdAndDelete(req.params.id);
     await Account.findOneAndDelete({ user: req.params.id });
     res.json({ success: true, message: 'User and associated orders deleted successfully' });
@@ -256,18 +238,12 @@ const createOrUpdateUser = async (req, res) => {
     let user = await User.findOne({ phone: formattedPhone });
     
     if (user) {
-      // User exists – check if phone is being changed
       const phoneChanged = formattedPhone !== user.phone;
-      
-      // If phone is changed, we need OTP verification
       if (phoneChanged) {
-        // Check if new phone already exists with another user
         const existingUser = await User.findOne({ phone: formattedPhone, _id: { $ne: user._id } });
         if (existingUser) {
           return res.status(400).json({ success: false, message: 'Phone number already in use by another account' });
         }
-        
-        // Send OTP to new phone
         if (!DISABLE_OTP_VERIFICATION) {
           try {
             await sendOTP(formattedPhone);
@@ -275,15 +251,12 @@ const createOrUpdateUser = async (req, res) => {
             return res.status(500).json({ success: false, message: "Failed to send OTP to new number" });
           }
         }
-        
-        // Set pending phone verification
         user.pendingPhoneVerification = {
           phone: formattedPhone,
           requestedAt: new Date(),
           operation: 'update'
         };
         await user.save();
-        
         return res.status(200).json({
           success: true,
           requiresOtp: true,
@@ -292,17 +265,13 @@ const createOrUpdateUser = async (req, res) => {
           phone: formattedPhone
         });
       }
-      
-      // No phone change – update other fields normally
       const updateData = {};
       if (name) updateData.name = name;
       if (address) updateData.address = address;
       if (role) updateData.role = role;
-      
       if (Object.keys(updateData).length > 0) {
         user = await User.findOneAndUpdate({ phone: formattedPhone }, updateData, { new: true, runValidators: true });
       }
-      
       if (deviceId) {
         user.addVerifiedDevice(deviceId, deviceInfo || {});
         await user.save();
@@ -317,8 +286,6 @@ const createOrUpdateUser = async (req, res) => {
         message: "Profile updated successfully",
       });
     }
-    
-    // New user creation
     const existingPending = await User.findOne({ 'pendingPhoneVerification.phone': formattedPhone });
     if (existingPending) {
       return res.status(400).json({
@@ -326,7 +293,6 @@ const createOrUpdateUser = async (req, res) => {
         message: 'Verification already pending for this phone. Please verify or request a new OTP.'
       });
     }
-    
     user = await User.create({
       name: name || "",
       phone: formattedPhone,
@@ -340,11 +306,9 @@ const createOrUpdateUser = async (req, res) => {
         operation: 'create'
       }
     });
-    
     if (!DISABLE_OTP_VERIFICATION) {
       await sendOTP(formattedPhone);
     }
-    
     return res.status(200).json({
       success: true,
       requiresOtp: true,
@@ -371,7 +335,6 @@ const loginUser = async (req, res) => {
     let user = await User.findOne({ phone: formattedPhone });
     
     if (!user) {
-      // Create new user (incomplete profile by default)
       user = await User.create({
         phone: formattedPhone,
         role,
@@ -394,12 +357,7 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // ========== UPDATED APPROVAL CHECK ==========
-    // Only block if:
-    // - phone is verified
-    // - role is rider
-    // - profile is fully complete (all required fields + phone verified)
-    // - not approved by admin
+    // Approval check: only block if profile is complete and not approved
     if (user.phoneVerified && user.role === 'rider' && user.isProfileComplete && !user.isApproved) {
       return res.status(403).json({
         success: false,
@@ -407,7 +365,6 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // For riders, ensure account exists (but don't block)
     if (user.role === 'rider') {
       let account = await Account.findOne({ user: user._id });
       if (!account) {
@@ -419,7 +376,6 @@ const loginUser = async (req, res) => {
       }
     }
 
-    // Disable OTP in dev mode
     if (DISABLE_OTP_VERIFICATION) {
       user.phoneVerified = true;
       user.addVerifiedDevice(deviceId, deviceInfo);
@@ -436,7 +392,6 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // Phone not verified → send OTP
     if (!user.phoneVerified) {
       try {
         await sendOTP(formattedPhone);
@@ -452,7 +407,6 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // Device not verified → send OTP
     if (!user.isDeviceVerified(deviceId)) {
       try {
         await sendOTP(formattedPhone);
@@ -468,7 +422,6 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // All verified → login
     user.addVerifiedDevice(deviceId, deviceInfo);
     await user.save();
     const token = user.generateAuthToken();
@@ -481,7 +434,6 @@ const loginUser = async (req, res) => {
       token,
       message: "Login successful",
     });
-
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message || "Server error" });
   }
@@ -614,22 +566,44 @@ const getProfile = async (req, res) => {
 // ==================== UPDATED UPDATE PROFILE ====================
 const updateProfile = async (req, res) => {
   try {
-    const {
-      name,
-      phone,
-      address,
-      vehicleType,
-      licensePlate,
-      guardianName,
-      guardianPhone,
-      idCardFrontUrl,
-      idCardBackUrl,
-      profileImage,
-      isActive,
-    } = req.body;
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // Phone change OTP flow (unchanged)
-    if (phone && phone !== req.user.phone) {
+    // If account is approved, only allow updating isActive and vehicleType
+    if (user.isApproved) {
+      const { isActive, vehicleType } = req.body;
+      if (typeof isActive !== 'undefined') {
+        user.isActive = isActive;
+        await user.save();
+        let account = await Account.findOne({ user: user._id });
+        if (account) {
+          account.status = isActive ? "active" : "inactive";
+          await account.save();
+        }
+        return res.json({ success: true, data: user, message: "Availability updated successfully" });
+      }
+      if (vehicleType) {
+        user.vehicleType = vehicleType;
+        await user.save();
+        let account = await Account.findOne({ user: user._id });
+        if (account) {
+          account.vehicleType = vehicleType;
+          await account.save();
+        }
+        // Recalculate profile completeness (may change if vehicle-specific fields are missing)
+        user.checkProfileComplete();
+        await user.save();
+        return res.json({ success: true, data: user, message: "Delivery type updated successfully" });
+      }
+      return res.status(403).json({
+        success: false,
+        message: "Your account is approved. Only delivery type and availability can be changed."
+      });
+    }
+
+    // Phone change OTP flow (only allowed if not approved)
+    const { phone } = req.body;
+    if (phone && phone !== user.phone) {
       const formattedPhone = formatPhoneNumber(phone);
       const existingUser = await User.findOne({ phone: formattedPhone, _id: { $ne: req.user.id } });
       if (existingUser) {
@@ -656,13 +630,22 @@ const updateProfile = async (req, res) => {
       });
     }
 
+    // Regular update (allowed only before approval)
+    const {
+      name, address, vehicleType, licensePlate, chassisNumber,
+      guardianName, guardianPhone, guardianRelationship,
+      idCardFrontUrl, idCardBackUrl, profileImage, isActive
+    } = req.body;
+
     const updateData = {};
     if (name !== undefined) updateData.name = name?.trim();
     if (address !== undefined) updateData.address = address?.trim();
     if (vehicleType !== undefined) updateData.vehicleType = vehicleType;
-    if (licensePlate !== undefined) updateData.licensePlate = vehicleType === 'car' ? licensePlate : "";
+    if (licensePlate !== undefined) updateData.licensePlate = licensePlate;
+    if (chassisNumber !== undefined) updateData.chassisNumber = chassisNumber;
     if (guardianName !== undefined) updateData.guardianName = guardianName?.trim();
     if (guardianPhone !== undefined) updateData.guardianPhone = guardianPhone?.trim();
+    if (guardianRelationship !== undefined) updateData.guardianRelationship = guardianRelationship?.trim();
     if (idCardFrontUrl !== undefined) updateData.idCardFrontUrl = idCardFrontUrl;
     if (idCardBackUrl !== undefined) updateData.idCardBackUrl = idCardBackUrl;
     if (profileImage !== undefined) updateData.profileImage = profileImage;
@@ -672,28 +655,27 @@ const updateProfile = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No fields to update' });
     }
 
-    let user = await User.findByIdAndUpdate(req.user.id, updateData, { new: true, runValidators: true });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    let updatedUser = await User.findByIdAndUpdate(req.user.id, updateData, { new: true, runValidators: true });
+    if (!updatedUser) return res.status(404).json({ success: false, message: "User not found" });
 
-    // Recompute profile completeness (name, address, phone)
-    user.checkProfileComplete();
-    await user.save();
+    updatedUser.checkProfileComplete();
+    await updatedUser.save();
 
-    let account = await Account.findOne({ user: user._id });
+    let account = await Account.findOne({ user: updatedUser._id });
     if (account) {
-      account.status = user.isActive ? "active" : "inactive";
+      account.status = updatedUser.isActive ? "active" : "inactive";
       await account.save();
-    } else if (user.role === "rider") {
+    } else if (updatedUser.role === "rider") {
       account = await Account.create({
-        user: user._id,
-        vehicleType: user.vehicleType,
-        status: user.isActive ? "active" : "inactive",
+        user: updatedUser._id,
+        vehicleType: updatedUser.vehicleType,
+        status: updatedUser.isActive ? "active" : "inactive",
       });
     }
 
     return res.json({
       success: true,
-      data: user,
+      data: updatedUser,
       account: account || null,
       message: "Profile updated successfully",
     });
@@ -733,7 +715,7 @@ const removeDevice = async (req, res) => {
 const getAllRidersWithStats = async (req, res) => {
   try {
     const riders = await User.find({ role: 'rider' })
-      .select('name phone email avatar status createdAt lastLogin isActive address vehicleType licensePlate')
+      .select('name phone email avatar status createdAt lastLogin isActive address vehicleType licensePlate chassisNumber')
       .lean();
     const riderIds = riders.map(r => r._id);
     const accounts = await Account.find({ user: { $in: riderIds } })
@@ -783,7 +765,7 @@ const getAllRidersWithStats = async (req, res) => {
       const avgDeliveryTime = completedCount ? totalDeliveryTime / completedCount : 0;
       const completionRate = riderOrders.length ? (completedCount / riderOrders.length) * 100 : 0;
       return {
-        rider: { id: rider._id, name: rider.name, phone: rider.phone, email: rider.email, avatar: rider.avatar, status: rider.status, isActive: rider.isActive, address: rider.address, vehicleType: rider.vehicleType, licensePlate: rider.licensePlate, joinedDate: rider.createdAt, lastLogin: rider.lastLogin },
+        rider: { id: rider._id, name: rider.name, phone: rider.phone, email: rider.email, avatar: rider.avatar, status: rider.status, isActive: rider.isActive, address: rider.address, vehicleType: rider.vehicleType, licensePlate: rider.licensePlate, chassisNumber: rider.chassisNumber, joinedDate: rider.createdAt, lastLogin: rider.lastLogin },
         account: account ? { totalEarnings: account.totalEarnings, totalDeliveries: account.totalDeliveries, completedDeliveries: account.completedDeliveries, rejectedDeliveries: account.rejectedDeliveries, cancelledDeliveries: account.cancelledDeliveries, averageRating: account.averageRating, totalReviews: account.totalReviews, performanceScore: account.performanceScore, ranking: account.ranking, vehicleType: account.vehicleType, vehicleModel: account.vehicleModel, licensePlate: account.licensePlate, online: account.online, accountStatus: account.status } : { totalEarnings:0, totalDeliveries:0, completedDeliveries:0, rejectedDeliveries:0, cancelledDeliveries:0, averageRating:0, totalReviews:0, performanceScore:0, ranking:'Bronze', vehicleType:'bike', vehicleModel:'', licensePlate:'', online:false, accountStatus:'inactive' },
         financial: { totalEarnings: Math.round(totalEarnings*100)/100, completedEarnings: Math.round(completedEarnings*100)/100, pendingEarnings: Math.round(pendingEarnings*100)/100, thisMonthEarnings: Math.round(thisMonthEarnings*100)/100, lastMonthEarnings: Math.round(lastMonthEarnings*100)/100, estimatedCommissionRate:'75%', averageEarningPerDelivery: completedCount ? Math.round((completedEarnings/completedCount)*100)/100 : 0 },
         performance: { totalOrders: riderOrders.length, completedOrders: completedCount, completionRate: Math.round(completionRate*100)/100, averageDeliveryTime: Math.round(avgDeliveryTime*100)/100, statusBreakdown: statusCounts, acceptanceRate: riderOrders.length ? Math.round(((riderOrders.length-statusCounts.rejected)/riderOrders.length)*100*100)/100 : 0 },
@@ -801,6 +783,7 @@ const getAllRidersWithStats = async (req, res) => {
 
 // ==================== ADMIN CLIENT DETAILS ====================
 const getClientById = async (req, res) => {
+  // ... unchanged (same as original)
   try {
     const { id } = req.params;
     const { page = 1, limit = 20, status } = req.query;
@@ -870,6 +853,7 @@ const getClientById = async (req, res) => {
 
 // ==================== ADMIN VENDOR DETAILS ====================
 const getVendorById = async (req, res) => {
+  // ... unchanged (same as original)
   try {
     const { id } = req.params;
     const { page = 1, limit = 20 } = req.query;
