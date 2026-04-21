@@ -38,8 +38,18 @@ const userSchema = new mongoose.Schema(
     // Rider-specific fields
     guardianName: { type: String, default: "" },
     guardianPhone: { type: String, default: "" },
+    guardianRelationship: { type: String, default: "" },
     idCardFrontUrl: { type: String, default: "" },
     idCardBackUrl: { type: String, default: "" },
+    
+    // Vehicle details
+    vehicleType: {
+      type: String,
+      enum: ["bike", "car", "bicycle", "on_foot"],
+      default: "bike",
+    },
+    licensePlate: { type: String, default: "" },      // for car
+    chassisNumber: { type: String, default: "" },     // for bike – NEW
     
     password: {
       type: String,
@@ -56,14 +66,7 @@ const userSchema = new mongoose.Schema(
       required: true,
       default: "client"
     },
-    vehicleType: {
-      type: String,
-      enum: ["bike", "car", "bicycle", "on_foot"],
-      default: "bike",
-    },
-    licensePlate: { type: String, default: "" },
     
-    // Admin approval for riders
     isApproved: { type: Boolean, default: false },
     
     rating: { type: Number, default: 4.5, min: 0, max: 5 },
@@ -126,7 +129,7 @@ userSchema.pre('save', async function(next) {
 
 userSchema.pre('findOneAndUpdate', async function(next) {
   const update = this.getUpdate();
-  const riderFields = ['name', 'address', 'phone', 'profileImage', 'guardianName', 'guardianPhone', 'idCardFrontUrl', 'idCardBackUrl', 'vehicleType', 'licensePlate'];
+  const riderFields = ['name', 'address', 'phone', 'profileImage', 'guardianName', 'guardianPhone', 'guardianRelationship', 'idCardFrontUrl', 'idCardBackUrl', 'vehicleType', 'licensePlate', 'chassisNumber'];
   
   let shouldRecalc = false;
   if (update.$set) {
@@ -218,26 +221,33 @@ userSchema.methods.generateAuthToken = function () {
   return token;
 };
 
-// ==================== UPDATED PROFILE COMPLETENESS ====================
 userSchema.methods.checkProfileComplete = function () {
   if (this.role === 'rider') {
-    // All fields must be present and phone must be verified
+    let vehicleFieldValid = false;
+    if (this.vehicleType === 'car') {
+      vehicleFieldValid = !!this.licensePlate;
+    } else if (this.vehicleType === 'bike') {
+      vehicleFieldValid = !!this.chassisNumber;
+    } else {
+      vehicleFieldValid = true; // bicycle and on_foot
+    }
+    
     const hasRequiredFields = !!(
       this.name &&
       this.address &&
       this.phone &&
       this.phoneVerified === true &&
       this.vehicleType &&
-      (this.vehicleType !== 'car' || this.licensePlate) && // licensePlate only for car
+      vehicleFieldValid &&
       this.guardianName &&
       this.guardianPhone &&
+      this.guardianRelationship &&
       this.idCardFrontUrl &&
       this.idCardBackUrl &&
       this.profileImage
     );
     this.isProfileComplete = hasRequiredFields;
   } else {
-    // For clients, vendors, admins: name, address, phone, and phoneVerified
     this.isProfileComplete = !!(this.name && this.address && this.phone && this.phoneVerified === true);
   }
   return this.isProfileComplete;
