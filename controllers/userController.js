@@ -569,9 +569,10 @@ const updateProfile = async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // If account is approved, only allow updating isActive and vehicleType
+    // For approved accounts, allow updating isActive, vehicleType, and the corresponding vehicle field
     if (user.isApproved) {
-      const { isActive, vehicleType } = req.body;
+      const { isActive, vehicleType, licensePlate, chassisNumber } = req.body;
+
       if (typeof isActive !== 'undefined') {
         user.isActive = isActive;
         await user.save();
@@ -580,30 +581,48 @@ const updateProfile = async (req, res) => {
           account.status = isActive ? "active" : "inactive";
           await account.save();
         }
-        return res.json({ success: true, data: user, message: "Availability updated successfully" });
+        return res.json({ success: true, data: user, message: "Availability updated" });
       }
+
       if (vehicleType) {
         user.vehicleType = vehicleType;
+        // When switching vehicle type, optionally clear the other field
+        if (vehicleType === 'car') {
+          user.chassisNumber = ''; // clear bike field
+        } else if (vehicleType === 'bike') {
+          user.licensePlate = ''; // clear car field
+        }
         await user.save();
         let account = await Account.findOne({ user: user._id });
         if (account) {
           account.vehicleType = vehicleType;
           await account.save();
         }
-        // Recalculate profile completeness (may change if vehicle-specific fields are missing)
-        user.checkProfileComplete();
-        await user.save();
-        return res.json({ success: true, data: user, message: "Delivery type updated successfully" });
+        return res.json({ success: true, data: user, message: "Delivery type updated" });
       }
+
+      // Allow updating licensePlate or chassisNumber
+      if (licensePlate !== undefined) {
+        user.licensePlate = licensePlate;
+        await user.save();
+        return res.json({ success: true, data: user, message: "License plate updated" });
+      }
+      if (chassisNumber !== undefined) {
+        user.chassisNumber = chassisNumber;
+        await user.save();
+        return res.json({ success: true, data: user, message: "Chassis number updated" });
+      }
+
       return res.status(403).json({
         success: false,
-        message: "Your account is approved. Only delivery type and availability can be changed."
+        message: "Only delivery type and vehicle details can be changed after approval."
       });
     }
 
-    // Phone change OTP flow (only allowed if not approved)
+    // ==================== For unapproved accounts (full edit) ====================
     const { phone } = req.body;
     if (phone && phone !== user.phone) {
+      // ... (existing phone change flow, unchanged)
       const formattedPhone = formatPhoneNumber(phone);
       const existingUser = await User.findOne({ phone: formattedPhone, _id: { $ne: req.user.id } });
       if (existingUser) {
@@ -613,7 +632,7 @@ const updateProfile = async (req, res) => {
         try {
           await sendOTP(formattedPhone);
         } catch (err) {
-          return res.status(500).json({ success: false, message: "Failed to send OTP to new number" });
+          return res.status(500).json({ success: false, message: "Failed to send OTP" });
         }
       }
       await User.findByIdAndUpdate(req.user.id, {
@@ -626,11 +645,10 @@ const updateProfile = async (req, res) => {
       return res.status(200).json({
         success: true,
         requiresOtp: true,
-        message: 'OTP sent to new phone number. Please verify to complete the change.'
+        message: 'OTP sent to new phone number. Please verify.'
       });
     }
 
-    // Regular update (allowed only before approval)
     const {
       name, address, vehicleType, licensePlate, chassisNumber,
       guardianName, guardianPhone, guardianRelationship,
