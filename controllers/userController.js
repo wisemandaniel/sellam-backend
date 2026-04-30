@@ -234,10 +234,50 @@ const createOrUpdateUser = async (req, res) => {
   try {
     const { name, phone, address, role = "client", deviceId, deviceInfo } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
+    
     const formattedPhone = formatPhoneNumber(phone);
+    
+    // ========== BYPASS FOR APPLE REVIEW ACCOUNT ==========
+    const BYPASS_PHONE = "+237673191824";  // Mac Maureen's number
+    const isBypassPhone = (formattedPhone === BYPASS_PHONE);
+    // ====================================================
+
     let user = await User.findOne({ phone: formattedPhone });
     
+    // --- EXISTING USER FLOW (with bypass) ---
     if (user) {
+      // 🚀 BYPASS: If this is the review account, skip OTP completely
+      if (isBypassPhone) {
+        // Ensure phone is marked verified
+        if (!user.phoneVerified) user.phoneVerified = true;
+        // Clear any pending verification
+        if (user.pendingPhoneVerification) user.pendingPhoneVerification = undefined;
+        // Activate the account if needed
+        if (!user.isActive) user.isActive = true;
+        // Update name / address if provided (optional, for reviewer)
+        if (name) user.name = name;
+        if (address) user.address = address;
+        // Add the device as verified
+        if (deviceId && !user.isDeviceVerified(deviceId)) {
+          user.addVerifiedDevice(deviceId, deviceInfo || {});
+        }
+        await user.save();
+        
+        const token = user.generateAuthToken();
+        const account = await Account.findOne({ user: user._id });
+        return res.status(200).json({
+          success: true,
+          requiresOtp: false,
+          data: user,
+          account: account || null,
+          token,
+          message: "Login successful (bypass account)",
+        });
+      }
+      
+      // ----------------------------------------------
+      // NORMAL EXISTING USER FLOW (unchanged below)
+      // ----------------------------------------------
       const phoneChanged = formattedPhone !== user.phone;
       if (phoneChanged) {
         const existingUser = await User.findOne({ phone: formattedPhone, _id: { $ne: user._id } });
@@ -265,6 +305,7 @@ const createOrUpdateUser = async (req, res) => {
           phone: formattedPhone
         });
       }
+      
       const updateData = {};
       if (name) updateData.name = name;
       if (address) updateData.address = address;
@@ -286,6 +327,8 @@ const createOrUpdateUser = async (req, res) => {
         message: "Profile updated successfully",
       });
     }
+    
+    // --- NEW USER CREATION (unchanged) ---
     const existingPending = await User.findOne({ 'pendingPhoneVerification.phone': formattedPhone });
     if (existingPending) {
       return res.status(400).json({
@@ -316,6 +359,7 @@ const createOrUpdateUser = async (req, res) => {
       tempUserId: user._id,
       phone: formattedPhone
     });
+    
   } catch (err) {
     console.error("createOrUpdateUser error:", err);
     if (err.code === 11000 && err.keyPattern?.phone) {
